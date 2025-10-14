@@ -10,7 +10,7 @@ This is an [**external Isaac Lab project**]((https://isaac-sim.github.io/IsaacLa
 
 - Python ≥ 3.9 (same environment as Isaac Lab)  
 
-- Access to this repository  
+- Access to this repositor
 
 ---
 
