@@ -136,7 +136,7 @@ actuators={
             ".*_hip_pitch_joint": 2.5,
             ".*_hip_roll_joint": 2.5,
             ".*_knee_joint": 4.0,},
-        armature=None,
+        armature=UnitreeActuatorCfg_M107_24.armature,
     ),
     # Motor: M107-15, Torque: 200 Nm
     # From your original "legs" group
@@ -146,7 +146,7 @@ actuators={
         velocity_limit=100,
         stiffness={"^.*_hip_yaw_joint$": 200.0,},
         damping={"^.*_hip_yaw_joint$": 2.5,},
-        armature=None,
+        armature=UnitreeActuatorCfg_M107_15.armature,
     ),
     # Motor: N7520-22.5, Torque: 120 Nm
     # From your original "arms" group

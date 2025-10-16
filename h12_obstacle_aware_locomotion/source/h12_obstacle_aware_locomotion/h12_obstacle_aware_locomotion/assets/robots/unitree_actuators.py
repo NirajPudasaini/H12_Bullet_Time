@@ -104,6 +104,7 @@ class UnitreeActuatorCfg_M107_15(UnitreeActuatorCfg):
     Y1 = 150.0
     Y2 = 182.8
 
+    armature = 0.063259741
 
 @configclass
 class UnitreeActuatorCfg_M107_24(UnitreeActuatorCfg):
@@ -112,6 +113,7 @@ class UnitreeActuatorCfg_M107_24(UnitreeActuatorCfg):
     Y1 = 240
     Y2 = 292.5
 
+    armature = 0.160478022
 
 @configclass
 class UnitreeActuatorCfg_Go2HV(UnitreeActuatorCfg):
