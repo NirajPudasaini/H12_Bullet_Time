@@ -11,6 +11,8 @@ from isaaclab.actuators import ActuatorNetMLPCfg, DCMotorCfg, ImplicitActuatorCf
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
+from unitree_actuators import UnitreeActuatorCfg_N7520_14p3, UnitreeActuatorCfg_N7520_22p5, UnitreeActuatorCfg_N5020_16, UnitreeActuatorCfg_M107_15, UnitreeActuatorCfg_M107_24
+
 H12_CFG_HANDLESS = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"{project_root}/assets/robots/unitree_model/H1-2/h1_2_handless/h1_2_handless.usd",
@@ -164,7 +166,7 @@ actuators={
             ".*_shoulder_.*_joint": 2.0,
             ".*_elbow_joint": 1.0,
         },
-        armature=None,
+        armature=UnitreeActuatorCfg_N7520_22p5.armature,
     ),
     # Motor: N5020-16, Torque: 25 Nm
     # From your original "arms" group
@@ -180,7 +182,7 @@ actuators={
         damping={
             ".*_wrist_.*_joint": 0.5,
         },
-        armature=None,
+        armature=UnitreeActuatorCfg_N5020_16.armature,
     ),
     # Motor: N7520-14.3, Torque: 75 Nm
     # Combined from your "feet" and "arms" groups
@@ -202,7 +204,7 @@ actuators={
             ".*_ankle_roll_joint": 0.3,       # From original "feet" config
             ".*_shoulder_yaw_joint": 1.0,   # From original "arms" config
         },
-        armature=None,
+        armature=UnitreeActuatorCfg_N7520_14p3.armature,
     ),
     },
 )
