@@ -2,6 +2,9 @@
 # License: Apache License, Version 2.0  
 """Configuration for Unitree robots."""
 
+
+#for armatures: https://github.com/correlllab/h12-lab-docs/blob/main/docs/specs.md
+
 import os
 
 project_root = "/home/niraj/isaac_projects/H12_Obstacle_Aware_Locomotion/h12_obstacle_aware_locomotion/source/h12_obstacle_aware_locomotion/h12_obstacle_aware_locomotion"
@@ -9,9 +12,47 @@ project_root = "/home/niraj/isaac_projects/H12_Obstacle_Aware_Locomotion/h12_obs
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ActuatorNetMLPCfg, DCMotorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
-from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+#from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+# from unitree_actuators import (
+#     UnitreeActuatorCfg_N7520_14p3,
+#     UnitreeActuatorCfg_N7520_22p5,
+#     UnitreeActuatorCfg_N5020_16,
+#     UnitreeActuatorCfg_M107_15,
+#     UnitreeActuatorCfg_M107_24,
+# )
 
-from unitree_actuators import UnitreeActuatorCfg_N7520_14p3, UnitreeActuatorCfg_N7520_22p5, UnitreeActuatorCfg_N5020_16, UnitreeActuatorCfg_M107_15, UnitreeActuatorCfg_M107_24
+#SET ARMATURES ~ can be found in unitree_actuators.py
+UnitreeActuatorCfg_N7520_14p3 = 0.01017752
+UnitreeActuatorCfg_N7520_22p5 = 0.025101925
+UnitreeActuatorCfg_N5020_16 = 0.003609725
+UnitreeActuatorCfg_M107_15 = 0.063259741
+UnitreeActuatorCfg_M107_24 = 0.160478022
+
+import math
+NATURAL_FREQ = 10 * 2.0 * math.pi  # 10Hz
+DAMPING_RATIO = 2.0
+
+# Calculate Stiffness (Kp) for each motor type
+STIFFNESS_M107_24 = UnitreeActuatorCfg_M107_24 * (NATURAL_FREQ**2)
+STIFFNESS_M107_15 = UnitreeActuatorCfg_M107_15 * (NATURAL_FREQ**2)
+STIFFNESS_N7520_22p5 = UnitreeActuatorCfg_N7520_22p5 * (NATURAL_FREQ**2)
+STIFFNESS_N5020_16 = UnitreeActuatorCfg_N5020_16 * (NATURAL_FREQ**2)
+STIFFNESS_N7520_14p3 = UnitreeActuatorCfg_N7520_14p3 * (NATURAL_FREQ**2)
+
+# Calculate Damping (Kd) for each motor type
+DAMPING_M107_24 = 2.0 * DAMPING_RATIO * UnitreeActuatorCfg_M107_24 * NATURAL_FREQ
+DAMPING_M107_15 = 2.0 * DAMPING_RATIO * UnitreeActuatorCfg_M107_15 * NATURAL_FREQ
+DAMPING_N7520_22p5 = 2.0 * DAMPING_RATIO * UnitreeActuatorCfg_N7520_22p5 * NATURAL_FREQ
+DAMPING_N5020_16 = 2.0 * DAMPING_RATIO * UnitreeActuatorCfg_N5020_16 * NATURAL_FREQ
+DAMPING_N7520_14p3 = 2.0 * DAMPING_RATIO * UnitreeActuatorCfg_N7520_14p3 * NATURAL_FREQ
+
+print(f"STIFFNESS_M107_24: {STIFFNESS_M107_24}, DAMPING_M107_24: {DAMPING_M107_24}")
+print(f"STIFFNESS_M107_15: {STIFFNESS_M107_15}, DAMPING_M107_15: {DAMPING_M107_15}")
+print(f"STIFFNESS_N7520_22p5: {STIFFNESS_N7520_22p5}, DAMPING_N7520_22p5: {DAMPING_N7520_22p5}")
+print(f"STIFFNESS_N5020_16: {STIFFNESS_N5020_16}, DAMPING_N5020_16: {DAMPING_N5020_16}")
+print(f"STIFFNESS_N7520_14p3: {STIFFNESS_N7520_14p3}, DAMPING_N7520_14p3: {DAMPING_N7520_14p3}")
+
+exit()
 
 H12_CFG_HANDLESS = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
