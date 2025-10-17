@@ -19,7 +19,7 @@ This is an [**external Isaac Lab project**]((https://isaac-sim.github.io/IsaacLa
 1. Clone the repository:
 
 ```bash
-git clone git@github.com:NirajPudasaini/H12_Obstacle_Aware_Locomotion.git
+git clone https://github.com/NirajPudasaini/H12_Obstacle_Aware_Locomotion.git
 cd H12_Obstacle_Aware_Locomotion/h12_obstacle_aware_locomotion
 ```
 
