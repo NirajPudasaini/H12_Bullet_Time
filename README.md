@@ -6,11 +6,7 @@ This is an [**external Isaac Lab project**]((https://isaac-sim.github.io/IsaacLa
 
 ## 🔹 Prerequisites
 
-- Isaac Lab installed and running in a conda environment, [Follow](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html) 
-
-- Python ≥ 3.9 (same environment as Isaac Lab)  
-
-- Access to this repositor
+- Isaac Lab installed and running in a conda environment, [Follow](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html)
 
 ---
 
