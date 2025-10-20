@@ -15,14 +15,14 @@ This is an [**external Isaac Lab project**]((https://isaac-sim.github.io/IsaacLa
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/NirajPudasaini/H12_Obstacle_Aware_Locomotion.git
-cd H12_Obstacle_Aware_Locomotion/h12_obstacle_aware_locomotion
+git clone https://github.com/NirajPudasaini/H12_Bullet_Time.git
+cd H12_Bullet_Time/h12_bullet_time
 ```
 
 2. Install the project in editable mode:
 
 ```bash
-python -m pip install -e source/h12_obstacle_aware_locomotion/
+python -m pip install -e source/h12_bullet_time/
 ```
 
 3. Check the tasks available in the project:
