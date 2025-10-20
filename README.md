@@ -1,4 +1,4 @@
-# H12 Obstacle Aware Locomotion
+# H12 Bullet Time
 
 This is an [**external Isaac Lab project**]((https://isaac-sim.github.io/IsaacLab/main/source/overview/own-project/template.html).) for testing obstacle-aware locomotion tasks with humanoid or quadruped robots. The project runs independently of the Isaac Lab core repository.  
 
