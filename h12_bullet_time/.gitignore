@@ -1,3 +1,6 @@
+# ignore markdown files
+**/*.md
+
 # C++
 **/cmake-build*/
 **/build*/

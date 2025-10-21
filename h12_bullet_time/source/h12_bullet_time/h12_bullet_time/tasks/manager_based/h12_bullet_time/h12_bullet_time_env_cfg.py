@@ -44,7 +44,7 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.SphereCfg(
             radius=0.1,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                mass=2.0,
+                # mass=2.0,
                 disable_gravity=False,
                 max_linear_velocity=100.0,
                 max_angular_velocity=100.0,

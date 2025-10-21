@@ -52,7 +52,7 @@ print(f"STIFFNESS_N7520_22p5: {STIFFNESS_N7520_22p5}, DAMPING_N7520_22p5: {DAMPI
 print(f"STIFFNESS_N5020_16: {STIFFNESS_N5020_16}, DAMPING_N5020_16: {DAMPING_N5020_16}")
 print(f"STIFFNESS_N7520_14p3: {STIFFNESS_N7520_14p3}, DAMPING_N7520_14p3: {DAMPING_N7520_14p3}")
 
-exit()
+# exit()
 
 H12_CFG_HANDLESS = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -177,7 +177,7 @@ actuators={
             ".*_hip_pitch_joint": 2.5,
             ".*_hip_roll_joint": 2.5,
             ".*_knee_joint": 4.0,},
-        armature=UnitreeActuatorCfg_M107_24.armature,
+        armature=UnitreeActuatorCfg_M107_24,
     ),
     # Motor: M107-15, Torque: 200 Nm
     # From your original "legs" group
@@ -187,7 +187,7 @@ actuators={
         velocity_limit=100,
         stiffness={"^.*_hip_yaw_joint$": 200.0,},
         damping={"^.*_hip_yaw_joint$": 2.5,},
-        armature=UnitreeActuatorCfg_M107_15.armature,
+        armature=UnitreeActuatorCfg_M107_15,
     ),
     # Motor: N7520-22.5, Torque: 120 Nm
     # From your original "arms" group
@@ -207,7 +207,7 @@ actuators={
             ".*_shoulder_.*_joint": 2.0,
             ".*_elbow_joint": 1.0,
         },
-        armature=UnitreeActuatorCfg_N7520_22p5.armature,
+        armature=UnitreeActuatorCfg_N7520_22p5,
     ),
     # Motor: N5020-16, Torque: 25 Nm
     # From your original "arms" group
@@ -223,7 +223,7 @@ actuators={
         damping={
             ".*_wrist_.*_joint": 0.5,
         },
-        armature=UnitreeActuatorCfg_N5020_16.armature,
+        armature=UnitreeActuatorCfg_N5020_16,
     ),
     # Motor: N7520-14.3, Torque: 75 Nm
     # Combined from your "feet" and "arms" groups
@@ -245,7 +245,7 @@ actuators={
             ".*_ankle_roll_joint": 0.3,       # From original "feet" config
             ".*_shoulder_yaw_joint": 1.0,   # From original "arms" config
         },
-        armature=UnitreeActuatorCfg_N7520_14p3.armature,
+        armature=UnitreeActuatorCfg_N7520_14p3,
     ),
     },
 )
