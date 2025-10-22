@@ -7,7 +7,8 @@
 
 import os
 
-project_root = "/home/niraj/isaac_projects/H12_Obstacle_Aware_Locomotion/h12_obstacle_aware_locomotion/source/h12_obstacle_aware_locomotion/h12_obstacle_aware_locomotion"
+# Prefer a repository-relative path so the USD assets bundled with this repo are used.
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ActuatorNetMLPCfg, DCMotorCfg, ImplicitActuatorCfg
@@ -56,7 +57,8 @@ print(f"STIFFNESS_N7520_14p3: {STIFFNESS_N7520_14p3}, DAMPING_N7520_14p3: {DAMPI
 
 H12_CFG_HANDLESS = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=f"{project_root}/assets/robots/unitree_model/H1-2/h1_2_handless/h1_2_handless.usd",
+        # Use the local USD asset bundled in this package (unitree_model/usd/...)
+        usd_path=os.path.join(os.path.dirname(__file__), "unitree_model", "usd", "h1_2_handless", "h1_2_handless.usd"),
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
