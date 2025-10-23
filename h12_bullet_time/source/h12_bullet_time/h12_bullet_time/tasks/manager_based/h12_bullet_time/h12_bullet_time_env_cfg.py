@@ -151,6 +151,19 @@ class RewardsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.0},
     )
 
+    # Alive bonus: reward for staying alive (not falling)
+    alive_bonus = RewTerm(
+        func=mdp.alive_bonus,
+        weight=0.5,
+        params={},
+    )
+
+    # Knee symmetry: encourage left and right knees to maintain similar angles
+    knee_symmetry = RewTerm(
+        func=mdp.knee_symmetry,
+        weight=0.3,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
 
 
 @configclass

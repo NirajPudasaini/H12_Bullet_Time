@@ -29,7 +29,57 @@ def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: Scen
     # return negative squared error (so reward decreases as height deviates)
     return -torch.square(height_error)
 
-# def is_alive(*args: Any, **kwargs: Any) -> float:
+
+def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Bonus reward for staying alive (not falling).
+    
+    Returns +1.0 for each timestep the robot is still running.
+    """
+    # Return constant reward per environment (batch)
+    return torch.ones(env.num_envs, dtype=torch.float32, device=env.device)
+
+
+def knee_symmetry(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Reward for keeping left and right knees at similar distance from each other.
+    
+    Encourages symmetric leg posture by maintaining consistent distance between left and right knee bodies.
+    This helps prevent one leg from bending more than the other.
+    Returns negative L2 distance from target separation so higher is better.
+    """
+    # extract robot asset
+    asset: Articulation = env.scene[asset_cfg.name]
+    
+    # Get body indices for left and right knees by name
+    body_names = asset.body_names
+    try:
+        left_knee_idx = body_names.index("left_knee_link")
+        right_knee_idx = body_names.index("right_knee_link")
+    except ValueError:
+        # If specific knee link names not found, try alternative names
+        try:
+            left_knee_idx = body_names.index("left_knee")
+            right_knee_idx = body_names.index("right_knee")
+        except ValueError:
+            # If still not found, return zero reward
+            print(f"Warning: Could not find knee bodies. Available bodies: {body_names}")
+            return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    
+    # Get left and right knee body positions in world frame
+    left_knee_pos = asset.data.body_pos_w[:, left_knee_idx, :]  # shape: (num_envs, 3)
+    right_knee_pos = asset.data.body_pos_w[:, right_knee_idx, :]  # shape: (num_envs, 3)
+    
+    # Compute 3D distance between knees
+    knee_distance = torch.norm(left_knee_pos - right_knee_pos, dim=1)  # shape: (num_envs,)
+    
+    # Target distance is roughly shoulder width (around 0.3-0.4 m for humanoid)
+    # We want to penalize deviation from this natural stance width
+    target_knee_distance = 0.4  # meters
+    
+    # Compute error: distance from target
+    distance_error = knee_distance - target_knee_distance
+    
+    # Return negative squared error (so reward increases when knees maintain target distance)
+    return -torch.square(distance_error)
 # 	"""Reward for being upright. Return +1.0 when standing."""
 # 	return 1.0
 

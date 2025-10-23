@@ -48,6 +48,62 @@ It allows you to develop in an isolated environment, outside of the core Isaac L
 
         These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
 
+## Training with RSL-RL
+
+### Basic Training
+
+To train :
+
+```bash
+cd H12_Bullet_Time/h12_bullet_time
+python scripts/rsl_rl/train.py --task=Template-H12-Bullet-Time-v0 --num_envs=4 #(for visualization)
+python scripts/rsl_rl/train.py --task=Template-H12-Bullet-Time-v0 --num_envs=4096 --headless #(actual training)
+```
+
+**Parameters:**
+- `--task`: Task identifier (use `Template-H12-Bullet-Time-v0` for H12 standing task)
+- `--num_envs`: Number of parallel environments
+- `--headless`: Run without GUI for faster training
+- `--max_iterations`: Maximum training iterations (default: 5000)
+
+
+
+## Playing Trained Models
+
+### Play with Latest Checkpoint
+
+To visualize the trained policy:
+
+```bash
+cd H12_Bullet_Time/h12_bullet_time
+python scripts/rsl_rl/play.py --task=Template-H12-Bullet-Time-v0 --num_envs=4 --use_last_checkpoint
+```
+
+### View Training Logs
+
+Training logs are saved to: `logs/rsl_rl/h12-bullet-time-ppo/<timestamp>/`
+
+Each run contains:
+- `model_*.pt`: Model checkpoints at different iterations
+- `events.out.tfevents.*`: TensorFlow event logs for TensorBoard
+- `params/`: Configuration YAML files
+
+
+### Policy Configuration
+
+PPO config: `source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/agents/rsl_rl_ppo_cfg.py`
+
+Key hyperparameters:
+- `max_iterations`: Total training iterations (default: 5000)
+- `num_steps_per_env`: Steps per environment before update (default: 16)
+- `learning_rate`: Policy learning rate (default: 1.0e-3)
+- `actor_hidden_dims`: Actor network hidden dimensions (default: [32, 32])
+- `critic_hidden_dims`: Critic network hidden dimensions (default: [32, 32])
+
+## Available Tasks
+
+<!-- 
+
         - Zero-action agent
 
             ```bash
@@ -132,4 +188,4 @@ Some examples of packages that can likely be excluded are:
 "<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
 "<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
 ...
-```
+``` -->

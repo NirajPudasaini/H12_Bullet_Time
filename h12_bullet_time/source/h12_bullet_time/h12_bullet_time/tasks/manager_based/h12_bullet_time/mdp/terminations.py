@@ -30,10 +30,6 @@ def base_height_below_threshold(
     base_height = asset.data.body_pos_w[:, 0, 2]
     # compute termination condition
     is_terminated = base_height < threshold
-    # debug: print a few values
-    if torch.any(is_terminated):
-        print(f"[Termination] base_height min={base_height.min():.3f}, threshold={threshold}, terminated={is_terminated.sum()}/{len(is_terminated)}")
-    # return True where height is below threshold
     return is_terminated
 
 
