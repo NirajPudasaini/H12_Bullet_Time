@@ -97,7 +97,7 @@ except ImportError:
     # Fallback for different Isaac Lab versions
     from rsl_rl.runners import OnPolicyRunner
     RslRlBaseRunnerCfg = None  # Will use dict-based config
-    RslRlVecEnvWrapper = None
+    RslRlVecEnvWrapper = None  # Will skip wrapping if not available
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
@@ -182,20 +182,16 @@ def main(env_cfg, agent_cfg):
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # wrap around environment for rsl-rl
-    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    # wrap around environment for rsl-rl (if wrapper is available)
+    if RslRlVecEnvWrapper is not None:
+        env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    # create runner from rsl-rl
-    if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-    elif agent_cfg.class_name == "DistillationRunner":
-        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
-    else:
-        raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    # create runner from rsl-rl (use OnPolicyRunner for PPO)
+    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
-    # load the checkpoint
-    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+    # load the checkpoint if resuming
+    if agent_cfg.resume:
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)

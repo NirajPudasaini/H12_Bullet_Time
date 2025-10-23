@@ -20,11 +20,6 @@ from isaaclab.utils import configclass
 from . import mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 
-##
-# Scene definition
-##
-
-
 @configclass
 class H12BulletTimeSceneCfg(InteractiveSceneCfg):
     """Configuration for H12 Bullet Time scene with projectile dodging."""
@@ -37,42 +32,16 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
 
     # robot - H12 humanoid
     robot: ArticulationCfg = H12_CFG_HANDLESS.replace(prim_path="{ENV_REGEX_NS}/Robot")
-    
-    # projectile objects (spheres for simplicity)
-    projectile: RigidObjectCfg = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Projectile",
-        spawn=sim_utils.SphereCfg(
-            radius=0.1,
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                # mass=2.0,
-                disable_gravity=False,
-                max_linear_velocity=100.0,
-                max_angular_velocity=100.0,
-            ),
-            material_props=sim_utils.RigidBodyMaterialCfg(
-                static_friction=0.5,
-                dynamic_friction=0.5,
-                restitution=0.8,
-            ),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
-        ),
-        init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(10.0, 0.0, 1.5),
-            vel=(0.0, 0.0, 0.0),
-        ),
-    )
-
+   
     # lights
     dome_light = AssetBaseCfg(
         prim_path="/World/DomeLight",
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
 
-
 ##
 # MDP settings
 ##
-
 
 @configclass
 class ActionsCfg:
@@ -128,21 +97,9 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        # robot state observations
-        robot_base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
-        robot_base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        robot_base_euler = ObsTerm(func=mdp.base_euler_angles)
-        
-        # joint observations
+        # observation terms (order preserved)
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
-        
-        # center of mass observations
-        robot_com_height = ObsTerm(func=mdp.com_height)
-        
-        # projectile relative observations
-        projectile_relative_pos = ObsTerm(func=mdp.projectile_relative_pos)
-        projectile_relative_vel = ObsTerm(func=mdp.projectile_relative_vel)
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -156,97 +113,55 @@ class ObservationsCfg:
 class EventCfg:
     """Configuration for events."""
 
-    # reset robot joints
-    reset_robot_joints = EventTerm(
-        func=mdp.reset_robot_to_standing,
+    # Reset base position and velocity on episode reset/termination
+    reset_base = EventTerm(
+        func=mdp.reset_root_state_uniform,
         mode="reset",
-        params={},
-    )
-    
-    # spawn projectile randomly
-    spawn_projectile = EventTerm(
-        func=mdp.spawn_projectile_randomly,
-        mode="startup",
         params={
-            "projectile_cfg": SceneEntityCfg("projectile"),
-            "robot_cfg": SceneEntityCfg("robot"),
+            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
+            },
         },
     )
 
+    # Reset robot joints to default positions on episode reset/termination
+    reset_robot_joints = EventTerm(
+        func=mdp.reset_joints_by_scale,
+        mode="reset",
+        params={
+            "position_range": (1.0, 1.0),
+            "velocity_range": (-1.0, 1.0),
+        },
+    )
 
 @configclass
 class RewardsCfg:
-    """Reward terms for the MDP - Curriculum based."""
+    """Reward terms for the MDP."""
 
-    # ============ STAGE 1: Standing and Balance ============
-    # Reward for maintaining upright posture
-    is_alive = RewTerm(
-        func=mdp.is_alive,
+    # Minimal reward: maintain base height at 1.0 m
+    base_height = RewTerm(
+        func=mdp.base_height_l2,
         weight=1.0,
-        params={"threshold": 0.65},  # 60cm COM height threshold
-    )
-    
-    # Penalize falling
-    fallen = RewTerm(
-        func=mdp.is_fallen,
-        weight=-5.0,
-        params={"threshold": 0.50},  # 50cm COM height means fallen
-    )
-    
-    # Reward for upright base orientation (Stage 1)
-    upright_torso = RewTerm(
-        func=mdp.upright_torso,
-        weight=2.0,
-    )
-    
-    # Penalize excessive joint velocities (Stage 1)
-    smooth_joints = RewTerm(
-        func=mdp.joint_vel_penalty,
-        weight=-0.01,
-        params={"asset_cfg": SceneEntityCfg("robot")},
+        params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.0},
     )
 
-    # ============ STAGE 2: Height Control & Agility ============
-    # Reward for height adjustment (crouching and standing)
-    height_control = RewTerm(
-        func=mdp.height_control,
+    # Alive bonus: reward for staying alive (not falling)
+    alive_bonus = RewTerm(
+        func=mdp.alive_bonus,
         weight=0.5,
-        params={"target_height": 1.03},
-    )
-    
-    # Reward lateral stability
-    lateral_stability = RewTerm(
-        func=mdp.lateral_stability,
-        weight=0.5,
+        params={},
     )
 
-    # ============ STAGE 3: Obstacle Dodging ============
-    # Reward for staying away from projectile
-    dodge_reward = RewTerm(
-        func=mdp.dodge_projectile,
-        weight=1.0,
-        params={
-            "projectile_cfg": SceneEntityCfg("projectile"),
-            "robot_cfg": SceneEntityCfg("robot"),
-            "safe_distance": 0.3,  # 30cm safe distance
-        },
-    )
-    
-    # Penalty for collision with projectile
-    projectile_collision = RewTerm(
-        func=mdp.projectile_collision_penalty,
-        weight=-10.0,
-        params={
-            "projectile_cfg": SceneEntityCfg("projectile"),
-            "robot_cfg": SceneEntityCfg("robot"),
-            "collision_distance": 0.15,  # 15cm collision threshold
-        },
-    )
-    
-    # Reward movement (displacement) for dodging
-    movement_reward = RewTerm(
-        func=mdp.movement_reward,
-        weight=0.5,
+    # Knee symmetry: encourage left and right knees to maintain similar angles
+    knee_symmetry = RewTerm(
+        func=mdp.knee_symmetry,
+        weight=0.3,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
@@ -255,24 +170,14 @@ class RewardsCfg:
 class TerminationsCfg:
     """Termination terms for the MDP."""
 
-    # Time out
+    # (1) Time out
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    
-    # Robot fell down
-    robot_fallen = DoneTerm(
-        func=mdp.is_fallen,
-        params={"threshold": 0.3},
-    )
-    
-    # Robot went out of bounds
-    robot_out_of_bounds = DoneTerm(
-        func=mdp.robot_out_of_bounds,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "bounds": (-2.0, 2.0, -2.0, 2.0),  # x_min, x_max, y_min, y_max
-        },
-    )
 
+    # (2) Base height too low (fell down)
+    base_height_low = DoneTerm(
+        func=mdp.base_height_below_threshold,
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.3},
+    )
 
 ##
 # Environment configuration
@@ -309,16 +214,16 @@ class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
 ##
 
 
-@configclass
-class CurriculumCfg:
-    """Curriculum learning configuration."""
+# @configclass
+# class CurriculumCfg:
+#     """Curriculum learning configuration."""
     
-    # Stage durations (in environment steps)
-    stage_1_steps = 1_000_000  # Standing and balance
-    stage_2_steps = 2_000_000  # Height control and agility
-    stage_3_steps = 3_000_000  # Projectile dodging
+#     # Stage durations (in environment steps)
+#     stage_1_steps = 1_000_000  # Standing and balance
+#     stage_2_steps = 2_000_000  # Height control and agility
+#     stage_3_steps = 3_000_000  # Projectile dodging
     
-    # Environment configuration variants for each stage
-    stage_1_cfg = H12BulletTimeEnvCfg()
-    stage_2_cfg = H12BulletTimeEnvCfg()
-    stage_3_cfg = H12BulletTimeEnvCfg()
+#     # Environment configuration variants for each stage
+#     stage_1_cfg = H12BulletTimeEnvCfg()
+#     stage_2_cfg = H12BulletTimeEnvCfg()
+#     stage_3_cfg = H12BulletTimeEnvCfg()

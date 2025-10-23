@@ -1,52 +1,57 @@
 # Template for Isaac Lab Projects
+### Basic Training
 
-## Overview
+To train :
 
-This project/repository serves as a template for building projects or extensions based on Isaac Lab.
-It allows you to develop in an isolated environment, outside of the core Isaac Lab repository.
+```bash
+cd H12_Bullet_Time/h12_bullet_time
+python scripts/rsl_rl/train.py --task=Template-H12-Bullet-Time-v0 --num_envs=4 #(for visualization)
+python scripts/rsl_rl/train.py --task=Template-H12-Bullet-Time-v0 --num_envs=4096 --headless #(actual training)
+```
 
-**Key Features:**
+**Parameters:**
+- `--task`: Task identifier (use `Template-H12-Bullet-Time-v0` for H12 standing task)
+- `--num_envs`: Number of parallel environments
+- `--headless`: Run without GUI for faster training
+- `--max_iterations`: Maximum training iterations (default: 5000)
 
-- `Isolation` Work outside the core Isaac Lab repository, ensuring that your development efforts remain self-contained.
-- `Flexibility` This template is set up to allow your code to be run as an extension in Omniverse.
 
-**Keywords:** extension, template, isaaclab
 
-## Installation
+## Playing Trained Models
 
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
-  We recommend using the conda or uv installation as it simplifies calling Python scripts from the terminal.
+### Play with Latest Checkpoint
 
-- Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
+To visualize the trained policy:
 
-- Using a python interpreter that has Isaac Lab installed, install the library in editable mode using:
+```bash
+cd H12_Bullet_Time/h12_bullet_time
+python scripts/rsl_rl/play.py --task=Template-H12-Bullet-Time-v0 --num_envs=4 --use_last_checkpoint
+```
 
-    ```bash
-    # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-    python -m pip install -e source/h12_bullet_time
+### View Training Logs
 
-- Verify that the extension is correctly installed by:
+Training logs are saved to: `logs/rsl_rl/h12-bullet-time-ppo/<timestamp>/`
 
-    - Listing the available tasks:
+Each run contains:
+- `model_*.pt`: Model checkpoints at different iterations
+- `events.out.tfevents.*`: TensorFlow event logs for TensorBoard
+- `params/`: Configuration YAML files
 
-        Note: It the task name changes, it may be necessary to update the search pattern `"Template-"`
-        (in the `scripts/list_envs.py` file) so that it can be listed.
 
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/list_envs.py
-        ```
+### Policy Configuration
 
-    - Running a task:
+PPO config: `source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/agents/rsl_rl_ppo_cfg.py`
 
-        ```bash
-        # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-        python scripts/<RL_LIBRARY>/train.py --task=<TASK_NAME>
-        ```
+Key hyperparameters:
+- `max_iterations`: Total training iterations (default: 5000)
+- `num_steps_per_env`: Steps per environment before update (default: 16)
+- `learning_rate`: Policy learning rate (default: 1.0e-3)
+- `actor_hidden_dims`: Actor network hidden dimensions (default: [32, 32])
+- `critic_hidden_dims`: Critic network hidden dimensions (default: [32, 32])
 
-    - Running a task with dummy agents:
+## Available Tasks
 
-        These include dummy agents that output zero or random agents. They are useful to ensure that the environments are configured correctly.
+<!-- 
 
         - Zero-action agent
 
@@ -132,4 +137,4 @@ Some examples of packages that can likely be excluded are:
 "<path-to-isaac-sim>/extscache/omni.graph.*"        // Graph UI tools
 "<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
 ...
-```
+``` -->

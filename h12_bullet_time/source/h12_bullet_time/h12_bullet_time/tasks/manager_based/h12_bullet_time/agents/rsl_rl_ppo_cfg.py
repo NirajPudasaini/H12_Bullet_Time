@@ -11,9 +11,9 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 @configclass
 class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 16
-    max_iterations = 150
+    max_iterations = 5000  # Increased from 150 for longer training
     save_interval = 50
-    experiment_name = "cartpole_direct"
+    experiment_name = "h12-bullet-time-ppo"
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
         actor_obs_normalization=False,
