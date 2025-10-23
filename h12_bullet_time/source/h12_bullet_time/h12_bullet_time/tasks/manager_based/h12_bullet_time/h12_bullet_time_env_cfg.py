@@ -19,6 +19,8 @@ from isaaclab.utils import configclass
 
 from . import mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
+# print(H12_CFG_HANDLESS.spawn.usd_path)
+# exit()
 
 @configclass
 class H12BulletTimeSceneCfg(InteractiveSceneCfg):
@@ -85,7 +87,7 @@ class ActionsCfg:
             "right_shoulder_roll_joint",   
             "right_elbow_joint",
         ],
-        scale= 0.25, #unitree rl lab uses 0.25 ? !! might need to change later
+        scale= 0.25, # change this scaling to make it 
     )
 
 
@@ -147,21 +149,21 @@ class RewardsCfg:
     # Minimal reward: maintain base height at 1.0 m
     base_height = RewTerm(
         func=mdp.base_height_l2,
-        weight=1.0,
+        weight= 1.0,
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.0},
     )
 
     # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
         func=mdp.alive_bonus,
-        weight=0.5,
+        weight= 5,
         params={},
     )
 
     # Knee symmetry: encourage left and right knees to maintain similar angles
     knee_symmetry = RewTerm(
         func=mdp.knee_symmetry,
-        weight=0.3,
+        weight= 0.5,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
