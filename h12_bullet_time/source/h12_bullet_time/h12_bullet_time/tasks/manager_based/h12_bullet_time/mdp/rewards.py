@@ -6,13 +6,11 @@ the curriculum logic can operate. Replace with more sophisticated terms later.
 from __future__ import annotations
 
 import torch
-from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
-if TYPE_CHECKING:
-    from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.envs import ManagerBasedRLEnv
 
 
 def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -51,18 +49,8 @@ def knee_symmetry(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Te
     
     # Get body indices for left and right knees by name
     body_names = asset.body_names
-    try:
-        left_knee_idx = body_names.index("left_knee_link")
-        right_knee_idx = body_names.index("right_knee_link")
-    except ValueError:
-        # If specific knee link names not found, try alternative names
-        try:
-            left_knee_idx = body_names.index("left_knee")
-            right_knee_idx = body_names.index("right_knee")
-        except ValueError:
-            # If still not found, return zero reward
-            print(f"Warning: Could not find knee bodies. Available bodies: {body_names}")
-            return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    left_knee_idx = body_names.index("left_knee_link")
+    right_knee_idx = body_names.index("right_knee_link")
     
     # Get left and right knee body positions in world frame
     left_knee_pos = asset.data.body_pos_w[:, left_knee_idx, :]  # shape: (num_envs, 3)
@@ -80,58 +68,50 @@ def knee_symmetry(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Te
     
     # Return negative squared error (so reward increases when knees maintain target distance)
     return -torch.square(distance_error)
-# 	"""Reward for being upright. Return +1.0 when standing."""
-# 	return 1.0
 
 
-# def is_fallen(*args: Any, **kwargs: Any) -> float:
-# 	"""Return 0.0 when not fallen, 1.0 when fallen (used as penalty elsewhere)."""
-# 	return 0.0
+def projectile_hit_penalty(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    projectile_names: list | None = None,
+    penalty: float = -10.0,
+    threshold: float = 0.3,
+) -> torch.Tensor:
+    """Return per-env penalty when a projectile collides (within threshold) with the robot base.
 
+    This mirrors the termination check and is intentionally simple: it computes
+    the minimum distance from the robot base to any projectile candidate and
+    applies `penalty` if closer than `threshold`.
+    """
+    # robot base position
+    asset: Articulation = env.scene[asset_cfg.name]
+    base_pos = asset.data.body_pos_w[:, 0, :]
 
-# def upright_torso(*args: Any, **kwargs: Any) -> float:
-# 	"""Reward for upright torso—simple positive signal."""
-# 	return 0.5
+    # candidate projectile names
+    scene_names = list(env.scene.keys())
+    candidates = [] if projectile_names is None else list(projectile_names)
+    if projectile_names is None:
+        for n in scene_names:
+            if "projectile" in n.lower() or "obstacle" in n.lower():
+                candidates.append(n)
 
+    if len(candidates) == 0:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
 
-# def joint_vel_penalty(*args: Any, **kwargs: Any) -> float:
-# 	"""Small penalty for joint velocity magnitude."""
-# 	return -0.01
+    min_dists = None
+    for name in candidates:
+        try:
+            obj = env.scene[name]
+            pos = obj.data.body_pos_w[:, 0, :]
+        except Exception:
+            continue
+        d = torch.norm(base_pos - pos, dim=1)
+        min_dists = d if min_dists is None else torch.minimum(min_dists, d)
 
+    if min_dists is None:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
 
-# def height_control(*args: Any, **kwargs: Any) -> float:
-# 	"""Stub for height control reward."""
-# 	return 0.0
-
-
-# def lateral_stability(*args: Any, **kwargs: Any) -> float:
-# 	"""Stub for lateral stability reward."""
-# 	return 0.0
-
-
-# def dodge_projectile(*args: Any, **kwargs: Any) -> float:
-# 	"""Stub for dodge reward (unused in Phase 1)."""
-# 	return 0.0
-
-
-# def projectile_collision_penalty(*args: Any, **kwargs: Any) -> float:
-# 	"""Stub penalty for collision (unused in Phase 1)."""
-# 	return 0.0
-
-
-# def movement_reward(*args: Any, **kwargs: Any) -> float:
-# 	"""Stub for movement reward."""
-# 	return 0.0
-
-
-# __all__ = [
-# 	"is_alive",
-# 	"is_fallen",
-# 	"upright_torso",
-# 	"joint_vel_penalty",
-# 	"height_control",
-# 	"lateral_stability",
-# 	"dodge_projectile",
-# 	"projectile_collision_penalty",
-# 	"movement_reward",
-# ]
+    hit = min_dists < float(threshold)
+    out = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    out[hit] = float(penalty)
+    return out

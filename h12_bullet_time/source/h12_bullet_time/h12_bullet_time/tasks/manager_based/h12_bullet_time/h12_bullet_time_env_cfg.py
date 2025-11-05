@@ -45,6 +45,19 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
 
+    # simple projectile obstacle (one per env) - static config; movement can be
+    # controlled via events or external scripts. Named so the mdp helpers can
+    # find it using the 'projectile' substring.
+    projectile = AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/Projectile",
+        spawn=sim_utils.SphereCfg(
+            radius=0.08,
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=False),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+        ),
+    )
+
 ##
 # MDP settings
 ##
@@ -118,6 +131,62 @@ class ObservationsCfg:
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
+    
+    @configclass
+    class CriticCfg(ObsGroup):
+        """Observations for critic group."""
+        pass
+
+    # NEED TO FIX THIS LATER ~ when adding camera depths    
+
+    #     # observation terms (order preserved)
+    #     # currently no noise added? and no scaling ?
+    #     base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+    #     projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+    #     joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
+    #     joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+    #     last_action = ObsTerm(func=mdp.last_action)
+        
+    #     def __post_init__(self) -> None:
+    #         self.history_length = 5
+    #         self.enable_corruption = False
+    #         self.concatenate_terms = True
+    # # privileged observations
+    # critic: CriticCfg = CriticCfg()
+
+
+@configclass
+class RewardsCfg:
+    """Reward terms for the MDP."""
+
+    # Minimal reward: maintain base height at 1.04 m
+    base_height = RewTerm(
+        func=mdp.base_height_l2,
+        weight= 1.04,
+        params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
+    )
+
+    # Alive bonus: reward for staying alive (not falling)
+    alive_bonus = RewTerm(
+        func=mdp.alive_bonus,
+        weight= 2.0,
+        params={},
+    )
+
+    # Knee symmetry: encourage left and right knees to maintain similar angles
+    knee_symmetry = RewTerm(
+        func=mdp.knee_symmetry,
+        weight= 0.5,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+
+    # Penalty when projectile hits the robot (useful for simple dodge training)
+    projectile_penalty = RewTerm(
+        func=mdp.projectile_hit_penalty,
+        weight=1.0,
+        params={"asset_cfg": SceneEntityCfg("robot"), "penalty": -10.0, "threshold": 0.25},
+    )
+
 
 
 @configclass
@@ -151,31 +220,14 @@ class EventCfg:
         },
     )
 
-@configclass
-class RewardsCfg:
-    """Reward terms for the MDP."""
-
-    # Minimal reward: maintain base height at 1.0 m
-    base_height = RewTerm(
-        func=mdp.base_height_l2,
-        weight= 1.0,
-        params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.0},
+    # Spawn and launch projectiles toward the robot at episode reset. This
+    # places the projectile at a randomized azimuth around the robot at
+    # `spawn_distance` and assigns it a velocity pointing at the robot base.
+    spawn_projectiles = EventTerm(
+        func=mdp.spawn_projectiles_on_reset,
+        mode="reset",
+        params={"kwargs": {"env_ids": None, "global_env_step_count": None}},
     )
-
-    # Alive bonus: reward for staying alive (not falling)
-    alive_bonus = RewTerm(
-        func=mdp.alive_bonus,
-        weight= 5,
-        params={},
-    )
-
-    # Knee symmetry: encourage left and right knees to maintain similar angles
-    knee_symmetry = RewTerm(
-        func=mdp.knee_symmetry,
-        weight= 0.5,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
-
 
 @configclass
 class TerminationsCfg:
@@ -188,6 +240,12 @@ class TerminationsCfg:
     base_height_low = DoneTerm(
         func=mdp.base_height_below_threshold,
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.3},
+    )
+
+    # (3) Projectile hit termination (when projectile comes too close)
+    projectile_hit = DoneTerm(
+        func=mdp.projectile_hit,
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.25},
     )
 
 ##
