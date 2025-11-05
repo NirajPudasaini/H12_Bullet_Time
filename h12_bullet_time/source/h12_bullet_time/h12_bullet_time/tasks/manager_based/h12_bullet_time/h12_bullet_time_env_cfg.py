@@ -17,6 +17,10 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 
+
+from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+
+
 from . import mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 # print(H12_CFG_HANDLESS.spawn.usd_path)
@@ -49,7 +53,7 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    # H12 has 19 DOF: 6 per leg + 3 per arm (shoulder pitch/roll, elbow) + torso too ! 
+    # H12 has 19 DOF: 6 per leg + 3 per arm (shoulder pitch/roll, elbow) + torso too ! ~ ignored wrist and shoulder yaw
     # We control: hip yaw/pitch/roll, knee, ankle pitch/roll for each leg
     # and shoulder pitch/roll, elbow for each arm and torso joint
 
@@ -76,8 +80,8 @@ class ActionsCfg:
             "torso_joint",
 
             #wrists are ignored !! yeah dodging with upper body only no wrist movement
-
-            # Left arm
+            #shoulder yaw also ignored
+            #Left arm
             "left_shoulder_pitch_joint", #7
             "left_shoulder_roll_joint",  #8
             "left_elbow_joint",   #2
@@ -100,10 +104,15 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
-
+        # currently no noise added? and no scaling ?
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        last_action = ObsTerm(func=mdp.last_action)
+        
         def __post_init__(self) -> None:
+            self.history_length = 5
             self.enable_corruption = False
             self.concatenate_terms = True
 

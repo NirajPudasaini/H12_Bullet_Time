@@ -41,12 +41,24 @@ from isaaclab_assets.robots.anymal import ANYMAL_C_CFG  # isort: skip
 class RaycasterSensorSceneCfg(InteractiveSceneCfg):
     """Design the scene with sensors on the robot."""
 
+
     # ground plane
     ground = AssetBaseCfg(
         prim_path="/World/Ground",
         spawn=sim_utils.UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/Terrains/rough_plane.usd",
             scale=(1, 1, 1),
+        ),
+    )
+
+    # Moving cube
+    moving_cube = AssetBaseCfg(
+        prim_path="/World/MovingCube",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.3, 0.3, 0.3),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
         ),
     )
 
@@ -62,7 +74,7 @@ class RaycasterSensorSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/Robot/base/lidar_cage",
         update_period= 1 / 60,
         offset=RayCasterCfg.OffsetCfg(pos=(0, 0, 0.5)),
-        mesh_prim_paths=["/World/Ground"],
+        mesh_prim_paths=["/World/MovingCube"],
         ray_alignment="yaw",
         pattern_cfg=patterns.LidarPatternCfg(
             channels=100, vertical_fov_range=[-90, 90], horizontal_fov_range=[-90, 90], horizontal_res=1.0
@@ -70,16 +82,7 @@ class RaycasterSensorSceneCfg(InteractiveSceneCfg):
         debug_vis=not args_cli.headless,
     )
 
-    # Moving cube
-    moving_cube = AssetBaseCfg(
-        prim_path="/World/MovingCube",
-        spawn=sim_utils.CuboidCfg(
-            size=(0.3, 0.3, 0.3),
-            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-        ),
-    )
+    
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     """Run the simulator."""
