@@ -27,7 +27,7 @@ from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 # exit()
 
 @configclass
-class H12BulletTimeSceneCfg(InteractiveSceneCfg):
+class H12BulletTimeSceneCfg_v1(InteractiveSceneCfg):
     """Configuration for H12 Bullet Time scene with projectile dodging."""
 
     # ground plane
@@ -49,13 +49,19 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
     # controlled via events or external scripts. Named so the mdp helpers can
     # find it using the 'projectile' substring.
 
-    projectile = AssetBaseCfg(
+    Projectile = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Projectile",
         spawn=sim_utils.SphereCfg(
             radius=0.08,
             mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=False),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 50.0),  # Spawn way up high for testing
+            rot=(1.0, 0.0, 0.0, 0.0),
+            lin_vel=(0.0, 0.0, 0.0),
+            ang_vel=(0.0, 0.0, 0.0),
         ),
     )
 
@@ -221,9 +227,9 @@ class EventCfg:
     )
 
     # Spawn and launch projectiles toward the robot at episode reset. This
-    # places the projectile at spawn_distance in the +X direction and assigns 
-    # it a velocity pointing at the robot base with randomized speed and elevation.
-
+    # places the projectile at a randomized azimuth around the robot at
+    # `spawn_distance` and assigns it a velocity pointing at the robot base.
+    # THIS MUST BE LAST so it runs after robot is reset!
     launch_projectile = EventTerm(
         func=mdp.launch_projectile,
         mode="reset",
@@ -243,21 +249,20 @@ class TerminationsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
     )
 
-    # # (3) Projectile hit termination (when projectile comes too close)
-    # projectile_hit = DoneTerm(
-    #     func=mdp.projectile_hit,
-    #     params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.25},
-    # )
+    # (3) Projectile hit termination (when projectile comes too close)
+    projectile_hit = DoneTerm(
+        func=mdp.projectile_hit,
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.25},
+    )
 
 ##
 # Environment configuration
 ##
 
-
 @configclass
-class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
+class H12BulletTimeEnvCfg_v1(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: H12BulletTimeSceneCfg = H12BulletTimeSceneCfg(num_envs=4096, env_spacing=4.0)
+    scene: H12BulletTimeSceneCfg_v1 = H12BulletTimeSceneCfg_v1(num_envs=4096, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

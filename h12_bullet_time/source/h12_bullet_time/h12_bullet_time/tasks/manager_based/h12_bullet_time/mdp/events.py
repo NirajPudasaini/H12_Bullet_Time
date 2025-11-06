@@ -1,120 +1,125 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+import sys
+from typing import TYPE_CHECKING
 
 import torch
 
-from isaaclab.assets import Articulation
-from isaaclab.managers import SceneEntityCfg
-
-from isaaclab.envs import ManagerBasedRLEnv
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
 
 
-def spawn_projectiles_on_reset(env: ManagerBasedRLEnv, kwargs=None) -> None:
+def launch_projectile(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     """Event handler to spawn and launch spherical projectiles toward the robot.
 
     This is intended to be called at episode reset (EventTerm with mode="reset").
-    The function uses internal defaults for spawn distance, speed, and elevation
-    and is defensive about API differences between IsaacLab versions.
+    The function spawns projectiles 3 meters above the robot at random azimuth
+    angles and 5m horizontal distance, then gives them velocity to fall toward the robot.
+    
+    Args:
+        env: The ManagerBasedRLEnv environment instance.
+        env_ids: Indices of environments to reset projectiles for.
     """
-    # defaults (internal)
+    print(f"[PROJ] launch_projectile called with env_ids shape: {env_ids.shape}, values: {env_ids}", file=sys.stderr)
+    sys.stderr.flush()
+    
+    # Internal configuration
     projectile_name = "Projectile"
-    spawn_distance = 5.0
+    spawn_distance_xy = 5.0  # horizontal distance from robot
+    spawn_height = 3.0       # height above robot base
     min_speed = 4.0
     max_speed = 8.0
-    elevation_deg = 10.0
 
-    device = getattr(env, "device", "cpu")
-
-    # find projectile and robot
-    if projectile_name not in env.scene:
-        return
-
-    proj = env.scene[projectile_name]
-    if "robot" not in env.scene:
-        return
-    robot = env.scene["robot"]
-
-    # Resolve env_ids and global_env_step_count from provided kwargs dict
-    env_ids = None
-    global_env_step_count = None
-    if isinstance(kwargs, dict):
-        env_ids = kwargs.get("env_ids", None)
-        global_env_step_count = kwargs.get("global_env_step_count", None)
-
-    # If env_ids is None or resets all envs, do a batched spawn. Otherwise
-    # handle per-env resets by looping over provided env ids.
+    # Try to get projectile and robot from scene
     try:
-        base_pos_all = robot.data.body_pos_w[:, 0, :]
-    except Exception:
+        proj = env.scene[projectile_name]
+        robot = env.scene["robot"]
+        robot_base_pos = robot.data.body_pos_w[:, 0, :]  # Body 0 is the base
+        print(f"[PROJ] Found projectile and robot in scene", file=sys.stderr)
+    except (KeyError, AttributeError, IndexError) as e:
+        # Assets not available, exit gracefully
+        print(f"[PROJ] ERROR: Failed to get projectile/robot from scene: {e}", file=sys.stderr)
+        print(f"[PROJ] Available scene keys: {list(env.scene.keys())}", file=sys.stderr)
+        sys.stderr.flush()
         return
 
-    # helper to spawn for a batch of indices — simplified: single spawn direction (+X)
-    def _spawn_for_indices(indices: torch.Tensor):
-        n = indices.numel()
-        # fixed direction: +X with small elevation variation
-        az = torch.zeros(n, device=device)
-        el = math.radians(float(elevation_deg)) * (2.0 * torch.rand(n, device=device) - 1.0)
-        dx = torch.cos(az) * torch.cos(el)
-        dy = torch.sin(az) * torch.cos(el)
-        dz = torch.sin(el)
-        dirs = torch.stack((dx, dy, dz), dim=1)
-
-        base_pos = base_pos_all[indices]
-        spawn_pos = base_pos + dirs * float(spawn_distance)
-
-        quats = torch.zeros((n, 4), dtype=torch.float32, device=device)
-        quats[:, 0] = 1.0
-
-        speeds = (min_speed + (max_speed - min_speed) * torch.rand(n, device=device)).unsqueeze(1)
-        to_base = base_pos - spawn_pos
-        to_base_norm = torch.norm(to_base, dim=1, keepdim=True).clamp(min=1e-6)
-        lin_vel = (to_base / to_base_norm) * speeds
-
-        # try batched set first
-        try:
-            proj.set_world_poses(positions=spawn_pos, orientations=quats)
-        except Exception:
-            # fallback to per-env pose set
-            for i in range(n):
-                p = spawn_pos[i : i + 1]
-                q = quats[i : i + 1]
-                try:
-                    proj.set_world_poses(positions=p, orientations=q)
-                except Exception:
-                    try:
-                        proj.write_root_pose_to_sim(p)
-                    except Exception:
-                        pass
-
-        # try writing linear velocities
-        try:
-            proj.write_root_velocity_to_sim(lin_vel)
-        except Exception:
-            # try per-env velocity writes
-            for i in range(n):
-                v = lin_vel[i : i + 1]
-                try:
-                    proj.write_root_velocity_to_sim(v)
-                except Exception:
-                    pass
-
-    # decide whether to do batch or per-env
-    if env_ids is None:
-        indices = torch.arange(env.num_envs, device=device, dtype=torch.long)
-        _spawn_for_indices(indices)
-    else:
-        # env_ids might be a list, numpy array, or torch tensor
-        try:
-            ids_tensor = torch.as_tensor(env_ids, device=device, dtype=torch.long)
-        except Exception:
-            # fallback: convert via list
-            ids_tensor = torch.tensor(list(env_ids), device=device, dtype=torch.long)
-        if ids_tensor.numel() == env.num_envs:
-            _spawn_for_indices(ids_tensor)
-        else:
-            # handle smaller subsets
-            _spawn_for_indices(ids_tensor)
-
-    return
+    device = robot_base_pos.device
+    
+    # Convert env_ids to long tensor
+    env_ids_long = env_ids.long() if isinstance(env_ids, torch.Tensor) else torch.tensor(env_ids, device=device, dtype=torch.long)
+    n = env_ids_long.numel()
+    if n == 0:
+        return
+    
+    # Get robot base positions for the envs being reset
+    base_pos = robot_base_pos[env_ids_long]  # shape (n, 3)
+    
+    # Random azimuth angles (around the robot)
+    az = torch.rand(n, device=device) * 2 * math.pi
+    
+    # Spawn position: offset in XY by spawn_distance_xy, add spawn_height to Z
+    dx_spawn = torch.cos(az) * spawn_distance_xy
+    dy_spawn = torch.sin(az) * spawn_distance_xy
+    
+    spawn_pos = base_pos.clone()
+    spawn_pos[:, 0] += dx_spawn
+    spawn_pos[:, 1] += dy_spawn
+    spawn_pos[:, 2] += spawn_height
+    
+    # Create identity quaternions (no rotation) [w, x, y, z]
+    quats = torch.zeros((n, 4), device=device, dtype=torch.float32)
+    quats[:, 0] = 1.0
+    
+    # Velocity: toward robot + downward
+    to_base_xy = base_pos[:, :2] - spawn_pos[:, :2]
+    to_base_z = torch.full_like(to_base_xy[:, :1], -spawn_height)
+    
+    to_base = torch.cat([to_base_xy, to_base_z], dim=-1)
+    to_base_dist = torch.norm(to_base, dim=-1, keepdim=True).clamp(min=1e-6)
+    direction_to_base = to_base / to_base_dist
+    
+    # Random speed for each projectile
+    speeds = (min_speed + (max_speed - min_speed) * torch.rand(n, device=device)).unsqueeze(-1)
+    vel = direction_to_base * speeds
+    
+    # Zero angular velocity
+    ang_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
+    
+    # For RigidObject, update individual data attributes
+    # RigidObjectData has: root_pos_w, root_quat_w, root_lin_vel_w, root_ang_vel_w
+    
+    # Update default state to ensure persistence through resets
+    try:
+        proj.data.default_root_state[env_ids_long, 0:3] = spawn_pos
+        proj.data.default_root_state[env_ids_long, 3:7] = quats
+        proj.data.default_root_state[env_ids_long, 7:10] = vel
+        proj.data.default_root_state[env_ids_long, 10:13] = ang_vel
+    except Exception as e:
+        print(f"[PROJ] Error setting default_root_state: {e}", file=sys.stderr)
+        sys.stderr.flush()
+    
+    # Update current state directly (RigidObject specific API)
+    try:
+        print(f"[PROJ] About to update positions for env_ids: {env_ids_long.tolist()}", file=sys.stderr)
+        print(f"[PROJ] Spawn positions shape: {spawn_pos.shape}, velocities shape: {vel.shape}", file=sys.stderr)
+        proj.data.root_pos_w[env_ids_long] = spawn_pos
+        proj.data.root_quat_w[env_ids_long] = quats
+        proj.data.root_lin_vel_w[env_ids_long] = vel
+        proj.data.root_ang_vel_w[env_ids_long] = ang_vel
+        print(f"[PROJ] Successfully updated data attributes", file=sys.stderr)
+    except Exception as e:
+        print(f"[PROJ] Error setting data attributes: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+    
+    # Write to physics engine
+    try:
+        proj.write_data_to_sim()
+    except Exception as e:
+        print(f"[PROJ] Error writing to sim: {e}", file=sys.stderr)
+        sys.stderr.flush()
+    
+    print(f"[PROJ] Spawn {n} projectiles at {spawn_pos[0].cpu()}", file=sys.stderr)
+    sys.stderr.flush()

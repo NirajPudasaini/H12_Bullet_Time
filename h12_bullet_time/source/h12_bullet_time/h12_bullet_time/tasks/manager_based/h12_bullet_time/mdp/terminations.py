@@ -64,8 +64,13 @@ def projectile_hit(
     for name in candidates:
         try:
             obj = env.scene[name]
-            pos = obj.data.body_pos_w[:, 0, :]
-        except Exception:
+            # For RigidObject, use root_pos_w. For other objects, fall back to body_pos_w
+            try:
+                pos = obj.data.root_pos_w
+            except AttributeError:
+                pos = obj.data.body_pos_w[:, 0, :]
+        except Exception as e:
+            print(f"[TERM] Error getting position for {name}: {e}", flush=True)
             continue
         d = torch.norm(base_pos - pos, dim=1)
         min_dists = d if min_dists is None else torch.minimum(min_dists, d)
@@ -73,4 +78,10 @@ def projectile_hit(
     if min_dists is None:
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-    return min_dists < float(threshold)
+    hit = min_dists < float(threshold)
+    # Print distance stats every few checks
+    if hit.any() or (torch.randint(0, 20, (1,)).item() == 0):  # Print occasionally
+        print(f"[TERM] Min distances: min={min_dists.min():.3f}, max={min_dists.max():.3f}, mean={min_dists.mean():.3f}, threshold={threshold}", flush=True)
+        if hit.any():
+            print(f"[TERM] Projectile hit detected! Hitting envs: {hit.nonzero(as_tuple=False).squeeze().tolist()}", flush=True)
+    return hit
