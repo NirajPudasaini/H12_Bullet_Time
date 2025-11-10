@@ -56,12 +56,16 @@ print(f"STIFFNESS_N7520_14p3: {STIFFNESS_N7520_14p3}, DAMPING_N7520_14p3: {DAMPI
 # exit()
 
 H12_CFG_HANDLESS = ArticulationCfg(
-    spawn=sim_utils.UsdFileCfg(
+    spawn=sim_utils.UrdfFileCfg(
         # Use the local USD asset bundled in this package (unitree_model/usd/...)
         # usd_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree_model/usd/h1_2_handless/h1_2_handless.usd",
-        usd_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree_model/usd/h1_2_handless/h1_2_handless.usd",
+        fix_base = False,
+        replace_cylinders_with_capsules=True,
+
+        asset_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_handless_skintest.urdf",
 
         activate_contact_sensors=True,
+
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             retain_accelerations=False,
@@ -71,6 +75,7 @@ H12_CFG_HANDLESS = ArticulationCfg(
             max_angular_velocity=1000.0,
             max_depenetration_velocity=1.0,
         ),
+        
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False, 
             solver_position_iteration_count=8,
