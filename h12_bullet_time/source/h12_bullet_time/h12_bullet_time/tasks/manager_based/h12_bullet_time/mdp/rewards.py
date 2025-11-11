@@ -12,7 +12,6 @@ from isaaclab.managers import SceneEntityCfg
 
 from isaaclab.envs import ManagerBasedRLEnv
 
-
 def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """Reward for maintaining base height close to target (default 1.0 m).
     
@@ -73,45 +72,50 @@ def knee_symmetry(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Te
 def projectile_hit_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
-    projectile_names: list | None = None,
+    projectile_name: str = "Projectile",
     penalty: float = -10.0,
-    threshold: float = 0.3,
+    threshold: float = 0.5,
 ) -> torch.Tensor:
-    """Return per-env penalty when a projectile collides (within threshold) with the robot base.
-
-    This mirrors the termination check and is intentionally simple: it computes
-    the minimum distance from the robot base to any projectile candidate and
-    applies `penalty` if closer than `threshold`.
+    """Penalty when projectile gets too close to any robot body part.
+    
+    Simple version: if projectile within threshold distance of any robot body → apply penalty.
+    
+    Args:
+        env: The environment
+        asset_cfg: Robot asset config
+        projectile_name: Name of projectile object
+        penalty: Penalty value (typically negative)
+        threshold: Distance threshold in meters
+        
+    Returns:
+        Tensor of rewards (0 or penalty value per env)
     """
-    # robot base position
-    asset: Articulation = env.scene[asset_cfg.name]
-    base_pos = asset.data.body_pos_w[:, 0, :]
-
-    # candidate projectile names
-    scene_names = list(env.scene.keys())
-    candidates = [] if projectile_names is None else list(projectile_names)
-    if projectile_names is None:
-        for n in scene_names:
-            if "projectile" in n.lower() or "obstacle" in n.lower():
-                candidates.append(n)
-
-    if len(candidates) == 0:
+    # Get robot
+    robot: Articulation = env.scene[asset_cfg.name]
+    robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)
+    
+    # Get projectile
+    try:
+        projectile = env.scene[projectile_name]
+        proj_pos = projectile.data.root_pos_w  # shape: (num_envs, 3)
+    except (KeyError, AttributeError):
+        # Projectile not found, no penalty
         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
-
-    min_dists = None
-    for name in candidates:
-        try:
-            obj = env.scene[name]
-            pos = obj.data.body_pos_w[:, 0, :]
-        except Exception:
-            continue
-        d = torch.norm(base_pos - pos, dim=1)
-        min_dists = d if min_dists is None else torch.minimum(min_dists, d)
-
-    if min_dists is None:
-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
-
-    hit = min_dists < float(threshold)
-    out = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
-    out[hit] = float(penalty)
-    return out
+    
+    # Compute distance from projectile to each robot body
+    # proj_pos: (num_envs, 3) -> (num_envs, 1, 3)
+    # robot_body_positions: (num_envs, num_bodies, 3)
+    distances = torch.norm(
+        robot_body_positions - proj_pos.unsqueeze(1),
+        dim=-1
+    )
+    
+    # Find minimum distance to any body for each environment
+    min_dist_per_env = distances.min(dim=1)[0]  # shape: (num_envs,)
+    
+    # Apply penalty if within threshold
+    reward = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    hit = min_dist_per_env < float(threshold)
+    reward[hit] = float(penalty)
+    
+    return reward

@@ -45,19 +45,6 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
 
-    # simple projectile obstacle (one per env) - static config; movement can be
-    # controlled via events or external scripts. Named so the mdp helpers can
-    # find it using the 'projectile' substring.
-
-    projectile = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/Projectile",
-        spawn=sim_utils.SphereCfg(
-            radius=0.08,
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=False),
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-        ),
-    )
 
 ##
 # MDP settings
@@ -163,21 +150,21 @@ class RewardsCfg:
     # Minimal reward: maintain base height at 1.04 m
     base_height = RewTerm(
         func=mdp.base_height_l2,
-        weight= 1.0,
+        weight= 0.5,
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
     # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
         func=mdp.alive_bonus,
-        weight= 2.0,
+        weight= 5.0,
         params={},
     )
 
     # Knee symmetry: encourage left and right knees to maintain similar angles
     knee_symmetry = RewTerm(
         func=mdp.knee_symmetry,
-        weight= 0.5,
+        weight= 0.2,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
@@ -220,16 +207,6 @@ class EventCfg:
         },
     )
 
-    # Spawn and launch projectiles toward the robot at episode reset. This
-    # places the projectile at spawn_distance in the +X direction and assigns 
-    # it a velocity pointing at the robot base with randomized speed and elevation.
-
-    launch_projectile = EventTerm(
-        func=mdp.launch_projectile,
-        mode="reset",
-        params={},
-    )
-
 @configclass
 class TerminationsCfg:
     """Termination terms for the MDP."""
@@ -242,12 +219,6 @@ class TerminationsCfg:
         func=mdp.base_height_below_threshold,
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
     )
-
-    # # (3) Projectile hit termination (when projectile comes too close)
-    # projectile_hit = DoneTerm(
-    #     func=mdp.projectile_hit,
-    #     params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.25},
-    # )
 
 ##
 # Environment configuration
@@ -277,23 +248,3 @@ class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
         # simulation settings
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
-
-
-##
-# Curriculum Configuration
-##
-
-
-# @configclass
-# class CurriculumCfg:
-#     """Curriculum learning configuration."""
-    
-#     # Stage durations (in environment steps)
-#     stage_1_steps = 1_000_000  # Standing and balance
-#     stage_2_steps = 2_000_000  # Height control and agility
-#     stage_3_steps = 3_000_000  # Projectile dodging
-    
-#     # Environment configuration variants for each stage
-#     stage_1_cfg = H12BulletTimeEnvCfg()
-#     stage_2_cfg = H12BulletTimeEnvCfg()
-#     stage_3_cfg = H12BulletTimeEnvCfg()

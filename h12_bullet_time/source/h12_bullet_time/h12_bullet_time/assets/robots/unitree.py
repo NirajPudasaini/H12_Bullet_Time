@@ -13,6 +13,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ActuatorNetMLPCfg, DCMotorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
+
 #from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 # from unitree_actuators import (
 #     UnitreeActuatorCfg_N7520_14p3,
@@ -62,7 +63,8 @@ H12_CFG_HANDLESS = ArticulationCfg(
         fix_base = False,
         replace_cylinders_with_capsules=True,
 
-        asset_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_handless_skintest.urdf",
+       # asset_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_handless.urdf",
+        asset_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf",
 
         activate_contact_sensors=True,
 
@@ -75,13 +77,15 @@ H12_CFG_HANDLESS = ArticulationCfg(
             max_angular_velocity=1000.0,
             max_depenetration_velocity=1.0,
         ),
-        
+
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False, 
             solver_position_iteration_count=8,
             solver_velocity_iteration_count=4
         ),
-
+        joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
+            gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
+        ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 1.05),               #same as gym
@@ -260,27 +264,27 @@ actuators={
     },
 )
 
-H12_ACTION_SCALE = {}
+# H12_ACTION_SCALE = {}
 
-for actuator in H12_CFG_HANDLESS.actuators.values():
-    # Get effort and stiffness parameters
-    effort = actuator.effort_limit
-    stiffness = actuator.stiffness
-    names = actuator.joint_names_expr
+# for actuator in H12_CFG_HANDLESS.actuators.values():
+#     # Get effort and stiffness parameters
+#     effort = actuator.effort_limit
+#     stiffness = actuator.stiffness
+#     names = actuator.joint_names_expr
 
-    # Ensure effort and stiffness are dicts for consistent access
-    if not isinstance(effort, dict):
-        effort = {n: effort for n in names}
-    if not isinstance(stiffness, dict):
-        stiffness = {n: stiffness for n in names}
+#     # Ensure effort and stiffness are dicts for consistent access
+#     if not isinstance(effort, dict):
+#         effort = {n: effort for n in names}
+#     if not isinstance(stiffness, dict):
+#         stiffness = {n: stiffness for n in names}
 
-    # Compute scaling per joint
-    for n in names:
-        if n in effort and n in stiffness and stiffness[n]:
-            # scale = 0.25 * torque_limit / stiffness  (radians per normalized action unit)
-            H12_ACTION_SCALE[n] = 0.25 * effort[n] / stiffness[n]
+#     # Compute scaling per joint
+#     for n in names:
+#         if n in effort and n in stiffness and stiffness[n]:
+#             # scale = 0.25 * torque_limit / stiffness  (radians per normalized action unit)
+#             H12_ACTION_SCALE[n] = 0.25 * effort[n] / stiffness[n]
 
-# Print summary for verification
-print("\n=== Computed H12_ACTION_SCALE values ===")
-for joint, scale in H12_ACTION_SCALE.items():
-    print(f"{joint}: {scale:.3f}")
+# # Print summary for verification
+# print("\n=== Computed H12_ACTION_SCALE values ===")
+# for joint, scale in H12_ACTION_SCALE.items():
+#     print(f"{joint}: {scale:.3f}")

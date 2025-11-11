@@ -45,20 +45,26 @@ class H12BulletTimeSceneCfg_v1(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
 
-    # simple projectile obstacle (one per env) - static config; movement can be
-    # controlled via events or external scripts. Named so the mdp helpers can
-    # find it using the 'projectile' substring.
-
+    # simple projectile obstacle (one per env) - spawned from random positions
+    # within 2x2m area around robot at 5m height, then launched toward robot base.
+    # Movement controlled via launch_projectile event at episode reset.
     Projectile = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Projectile",
         spawn=sim_utils.SphereCfg(
-            radius=0.08,
+            radius=0.075,  
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.0, 0.0, 1.0),  # Blue
+                metallic=0.2,
+            ),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                solver_position_iteration_count=4,
+                solver_velocity_iteration_count=0,
+            ),
             mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=False),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 50.0),  # Spawn way up high for testing
+            pos=(0.0, 0.0, 1.0),  # Initial spawn height
             rot=(1.0, 0.0, 0.0, 0.0),
             lin_vel=(0.0, 0.0, 0.0),
             ang_vel=(0.0, 0.0, 0.0),
@@ -141,25 +147,37 @@ class ObservationsCfg:
     
     @configclass
     class CriticCfg(ObsGroup):
-        """Observations for critic group."""
-        pass
-
-    # NEED TO FIX THIS LATER ~ when adding camera depths    
-
-    #     # observation terms (order preserved)
-    #     # currently no noise added? and no scaling ?
-    #     base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
-    #     projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
-    #     joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
-    #     joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-    #     last_action = ObsTerm(func=mdp.last_action)
+        """Observations for critic group - includes privileged info about projectile."""
         
-    #     def __post_init__(self) -> None:
-    #         self.history_length = 5
-    #         self.enable_corruption = False
-    #         self.concatenate_terms = True
-    # # privileged observations
-    # critic: CriticCfg = CriticCfg()
+        # Basic state
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        last_action = ObsTerm(func=mdp.last_action)
+        
+        # Projectile observations (privileged info for critic)
+        # These help the value function estimate future rewards based on incoming threat
+        projectile_pos_rel = ObsTerm(
+            func=mdp.projectile_position_relative,
+            scale=0.25,  # Scale to similar magnitude as other observations
+        )
+        projectile_vel = ObsTerm(
+            func=mdp.projectile_velocity,
+            scale=0.1,  # Smaller scale for velocity
+        )
+        projectile_dist = ObsTerm(
+            func=mdp.projectile_distance,
+            scale=0.5,  # Distance scaling
+        )
+        
+        def __post_init__(self) -> None:
+            self.history_length = 5  
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    # Enable critic observations
+    critic: CriticCfg = CriticCfg()
 
 
 @configclass
@@ -169,30 +187,30 @@ class RewardsCfg:
     # Minimal reward: maintain base height at 1.04 m
     base_height = RewTerm(
         func=mdp.base_height_l2,
-        weight= 1.0,
+        weight= 0.1,
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
     # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
         func=mdp.alive_bonus,
-        weight= 2.0,
+        weight= 5.0,
         params={},
     )
 
     # Knee symmetry: encourage left and right knees to maintain similar angles
     knee_symmetry = RewTerm(
         func=mdp.knee_symmetry,
-        weight= 0.5,
+        weight= 0.1,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
 
-    # # Penalty when projectile hits the robot (useful for simple dodge training)
-    # projectile_penalty = RewTerm(
-    #     func=mdp.projectile_hit_penalty,
-    #     weight=1.0,
-    #     params={"asset_cfg": SceneEntityCfg("robot"), "penalty": -10.0, "threshold": 0.25},
-    # )
+    # Penalty when projectile hits the robot (useful for simple dodge training)
+    projectile_penalty = RewTerm(
+        func=mdp.projectile_hit_penalty,
+        weight=1.0,
+        params={"asset_cfg": SceneEntityCfg("robot"), "penalty": -10.0, "threshold": 0.5},
+    )
 
 
 @configclass
@@ -227,13 +245,15 @@ class EventCfg:
     )
 
     # Spawn and launch projectiles toward the robot at episode reset. This
-    # places the projectile at a randomized azimuth around the robot at
-    # `spawn_distance` and assigns it a velocity pointing at the robot base.
+    # places the projectile from random position within 2x2m area at 5m height
+    # and assigns it a velocity pointing at the robot base.
     # THIS MUST BE LAST so it runs after robot is reset!
     launch_projectile = EventTerm(
         func=mdp.launch_projectile,
         mode="reset",
-        params={},
+        params={
+            "asset_cfg": SceneEntityCfg("Projectile"),
+        },
     )
 
 @configclass
@@ -249,10 +269,10 @@ class TerminationsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
     )
 
-    # (3) Projectile hit termination (when projectile comes too close)
+    # (3) Projectile hit termination (when projectile comes within threshold of ANY robot body part)
     projectile_hit = DoneTerm(
         func=mdp.projectile_hit,
-        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.25},
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.5},  # 0.5 meter distance threshold
     )
 
 ##
@@ -282,23 +302,3 @@ class H12BulletTimeEnvCfg_v1(ManagerBasedRLEnvCfg):
         # simulation settings
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
-
-
-##
-# Curriculum Configuration
-##
-
-
-# @configclass
-# class CurriculumCfg:
-#     """Curriculum learning configuration."""
-    
-#     # Stage durations (in environment steps)
-#     stage_1_steps = 1_000_000  # Standing and balance
-#     stage_2_steps = 2_000_000  # Height control and agility
-#     stage_3_steps = 3_000_000  # Projectile dodging
-    
-#     # Environment configuration variants for each stage
-#     stage_1_cfg = H12BulletTimeEnvCfg()
-#     stage_2_cfg = H12BulletTimeEnvCfg()
-#     stage_3_cfg = H12BulletTimeEnvCfg()

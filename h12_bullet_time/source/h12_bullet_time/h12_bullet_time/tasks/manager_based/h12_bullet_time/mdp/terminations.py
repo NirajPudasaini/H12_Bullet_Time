@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import sys
 import torch
 from typing import TYPE_CHECKING
 
@@ -14,22 +15,13 @@ if TYPE_CHECKING:
 def base_height_below_threshold(
     env: ManagerBasedRLEnv, threshold: float, asset_cfg: SceneEntityCfg
 ) -> torch.Tensor:
-    """Terminate if base height drops below threshold (robot fell down).
-    
-    Args:
-        env: The environment.
-        threshold: Height threshold (in meters). Episode terminates if base_height < threshold.
-        asset_cfg: Configuration for the asset (robot).
-    
-    Returns:
-        Boolean tensor indicating which environments should terminate.
-    """
     # extract robot asset
     asset: Articulation = env.scene[asset_cfg.name]
     # get base height (z-position of root body)
     base_height = asset.data.body_pos_w[:, 0, 2]
     # compute termination condition
     is_terminated = base_height < threshold
+
     return is_terminated
 
 
@@ -37,19 +29,16 @@ def projectile_hit(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
     projectile_names: list | None = None,
-    threshold: float = 0.3,
+    threshold: float = 0.1,
 ) -> torch.Tensor:
-    """Terminate episode when any projectile comes within `threshold` of robot base.
 
-    This mirrors `projectile_hit_penalty` in rewards and uses the same name
-    matching heuristic when `projectile_names` is None.
-    Returns a boolean tensor (shape (num_envs,)) where True indicates termination.
-    """
-    # robot base position
-    asset: Articulation = env.scene[asset_cfg.name]
-    base_pos = asset.data.body_pos_w[:, 0, :]
-
-    # candidate projectile names
+    # Get robot and projectiles
+    robot: Articulation = env.scene[asset_cfg.name]
+    
+    # Get all body positions of the robot: shape (num_envs, num_bodies, 3)
+    robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)
+    
+    # Find projectiles
     scene_names = list(env.scene.keys())
     candidates = [] if projectile_names is None else list(projectile_names)
     if projectile_names is None:
@@ -60,28 +49,31 @@ def projectile_hit(
     if len(candidates) == 0:
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-    min_dists = None
+    hit = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    
+    # Check distance from projectile to each robot body
     for name in candidates:
+
+        obj = env.scene[name]
+        # Get projectile position
         try:
-            obj = env.scene[name]
-            # For RigidObject, use root_pos_w. For other objects, fall back to body_pos_w
-            try:
-                pos = obj.data.root_pos_w
-            except AttributeError:
-                pos = obj.data.body_pos_w[:, 0, :]
-        except Exception as e:
-            print(f"[TERM] Error getting position for {name}: {e}", flush=True)
-            continue
-        d = torch.norm(base_pos - pos, dim=1)
-        min_dists = d if min_dists is None else torch.minimum(min_dists, d)
-
-    if min_dists is None:
-        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-
-    hit = min_dists < float(threshold)
-    # Print distance stats every few checks
-    if hit.any() or (torch.randint(0, 20, (1,)).item() == 0):  # Print occasionally
-        print(f"[TERM] Min distances: min={min_dists.min():.3f}, max={min_dists.max():.3f}, mean={min_dists.mean():.3f}, threshold={threshold}", flush=True)
-        if hit.any():
-            print(f"[TERM] Projectile hit detected! Hitting envs: {hit.nonzero(as_tuple=False).squeeze().tolist()}", flush=True)
+            proj_pos = obj.data.root_pos_w  # shape: (num_envs, 3)
+        except AttributeError:
+            proj_pos = obj.data.body_pos_w[:, 0, :]  # shape: (num_envs, 3)
+        
+        # Compute distance from projectile to each robot body
+        # proj_pos: (num_envs, 3) -> (num_envs, 1, 3)
+        # robot_body_positions: (num_envs, num_bodies, 3)
+        # distance: (num_envs, num_bodies)
+        distances = torch.norm(
+            robot_body_positions - proj_pos.unsqueeze(1),
+            dim=-1
+        )
+        
+        # Find minimum distance to any body for each environment
+        min_dist_per_env = distances.min(dim=1)[0]  # shape: (num_envs,)
+        
+        # Update hit mask
+        hit = hit | (min_dist_per_env < float(threshold))
+            
     return hit
