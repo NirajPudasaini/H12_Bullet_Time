@@ -185,11 +185,11 @@ class RewardsCfg:
     """Reward terms for the MDP."""
 
     # Minimal reward: maintain base height at 1.04 m
-    base_height = RewTerm(
-        func=mdp.base_height_l2,
-        weight= 0.1,
-        params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
-    )
+    # base_height = RewTerm(
+    #     func=mdp.base_height_l2,
+    #     weight= 0.1,
+    #     params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
+    # )
 
     # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
@@ -198,12 +198,12 @@ class RewardsCfg:
         params={},
     )
 
-    # Knee symmetry: encourage left and right knees to maintain similar angles
-    knee_symmetry = RewTerm(
-        func=mdp.knee_symmetry,
-        weight= 0.1,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
+    # # Knee symmetry: encourage left and right knees to maintain similar angles
+    # knee_symmetry = RewTerm(
+    #     func=mdp.knee_symmetry,
+    #     weight= 0.1,
+    #     params={"asset_cfg": SceneEntityCfg("robot")},
+    # )
 
     # Penalty when projectile hits the robot (useful for simple dodge training)
     projectile_penalty = RewTerm(

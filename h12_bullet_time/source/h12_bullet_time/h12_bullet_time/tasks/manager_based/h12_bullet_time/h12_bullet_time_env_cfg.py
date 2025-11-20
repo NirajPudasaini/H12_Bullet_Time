@@ -58,7 +58,7 @@ class ActionsCfg:
     # We control: hip yaw/pitch/roll, knee, ankle pitch/roll for each leg
     # and shoulder pitch/roll, elbow for each arm and torso joint
 
-    joint_effort = mdp.JointEffortActionCfg(
+    joint_effort = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[
             # Left leg
@@ -92,7 +92,7 @@ class ActionsCfg:
             "right_shoulder_roll_joint",   
             "right_elbow_joint",
         ],
-        scale= 0.25, # change this scaling to make it 
+        scale= 0.25,  
     )
 
 
@@ -113,8 +113,8 @@ class ObservationsCfg:
         last_action = ObsTerm(func=mdp.last_action)
         
         def __post_init__(self) -> None:
-            self.history_length = 5
-            self.enable_corruption = False
+            # self.history_length = 5
+            self.enable_corruption = True
             self.concatenate_terms = True
 
     # observation groups
@@ -150,7 +150,7 @@ class RewardsCfg:
     # Minimal reward: maintain base height at 1.04 m
     base_height = RewTerm(
         func=mdp.base_height_l2,
-        weight= 0.5,
+        weight= -10.0,
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
@@ -161,12 +161,12 @@ class RewardsCfg:
         params={},
     )
 
-    # Knee symmetry: encourage left and right knees to maintain similar angles
-    knee_symmetry = RewTerm(
-        func=mdp.knee_symmetry,
-        weight= 0.2,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
+    # # Knee symmetry: encourage left and right knees to maintain similar angles
+    # knee_symmetry = RewTerm(
+    #     func=mdp.knee_symmetry,
+    #     weight= 0.2,
+    #     params={"asset_cfg": SceneEntityCfg("robot")},
+    # )
 
     # # Penalty when projectile hits the robot (useful for simple dodge training)
     # projectile_penalty = RewTerm(

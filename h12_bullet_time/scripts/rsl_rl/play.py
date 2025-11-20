@@ -157,7 +157,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         policy_nn = runner.alg.policy
     except AttributeError:
         # version 2.2 and below
-        policy_nn = runner.alg.actor_critic
+        policy_nn = runner.alg.policy
 
     # extract the normalizer
     if hasattr(policy_nn, "actor_obs_normalizer"):

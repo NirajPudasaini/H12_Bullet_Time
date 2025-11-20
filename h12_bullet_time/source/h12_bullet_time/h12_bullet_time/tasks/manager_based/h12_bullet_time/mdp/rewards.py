@@ -12,19 +12,19 @@ from isaaclab.managers import SceneEntityCfg
 
 from isaaclab.envs import ManagerBasedRLEnv
 
-def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Reward for maintaining base height close to target (default 1.0 m).
+# def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+#     """Reward for maintaining base height close to target (default 1.0 m).
     
-    Returns negative L2 distance from target height so higher is better.
-    """
-    # extract robot asset
-    asset: Articulation = env.scene[asset_cfg.name]
-    # get base height (z-position of root body)
-    base_height = asset.data.body_pos_w[:, 0, 2]
-    # compute L2 distance from target
-    height_error = base_height - target_height
-    # return negative squared error (so reward decreases as height deviates)
-    return -torch.square(height_error)
+#     Returns negative L2 distance from target height so higher is better.
+#     """
+#     # extract robot asset
+#     asset: Articulation = env.scene[asset_cfg.name]
+#     # get base height (z-position of root body)
+#     base_height = asset.data.body_pos_w[:, 0, 2]
+#     # compute L2 distance from target
+#     height_error = base_height - target_height
+#     # return negative squared error (so reward decreases as height deviates)
+#     return -torch.square(height_error)
 
 
 def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -36,37 +36,37 @@ def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
     return torch.ones(env.num_envs, dtype=torch.float32, device=env.device)
 
 
-def knee_symmetry(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Reward for keeping left and right knees at similar distance from each other.
+# def knee_symmetry(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+#     """Reward for keeping left and right knees at similar distance from each other.
     
-    Encourages symmetric leg posture by maintaining consistent distance between left and right knee bodies.
-    This helps prevent one leg from bending more than the other.
-    Returns negative L2 distance from target separation so higher is better.
-    """
-    # extract robot asset
-    asset: Articulation = env.scene[asset_cfg.name]
+#     Encourages symmetric leg posture by maintaining consistent distance between left and right knee bodies.
+#     This helps prevent one leg from bending more than the other.
+#     Returns negative L2 distance from target separation so higher is better.
+#     """
+#     # extract robot asset
+#     asset: Articulation = env.scene[asset_cfg.name]
     
-    # Get body indices for left and right knees by name
-    body_names = asset.body_names
-    left_knee_idx = body_names.index("left_knee_link")
-    right_knee_idx = body_names.index("right_knee_link")
+#     # Get body indices for left and right knees by name
+#     body_names = asset.body_names
+#     left_knee_idx = body_names.index("left_knee_link")
+#     right_knee_idx = body_names.index("right_knee_link")
     
-    # Get left and right knee body positions in world frame
-    left_knee_pos = asset.data.body_pos_w[:, left_knee_idx, :]  # shape: (num_envs, 3)
-    right_knee_pos = asset.data.body_pos_w[:, right_knee_idx, :]  # shape: (num_envs, 3)
+#     # Get left and right knee body positions in world frame
+#     left_knee_pos = asset.data.body_pos_w[:, left_knee_idx, :]  # shape: (num_envs, 3)
+#     right_knee_pos = asset.data.body_pos_w[:, right_knee_idx, :]  # shape: (num_envs, 3)
     
-    # Compute 3D distance between knees
-    knee_distance = torch.norm(left_knee_pos - right_knee_pos, dim=1)  # shape: (num_envs,)
+#     # Compute 3D distance between knees
+#     knee_distance = torch.norm(left_knee_pos - right_knee_pos, dim=1)  # shape: (num_envs,)
     
-    # Target distance is roughly shoulder width (around 0.3-0.4 m for humanoid)
-    # We want to penalize deviation from this natural stance width
-    target_knee_distance = 0.4  # meters
+#     # Target distance is roughly shoulder width (around 0.3-0.4 m for humanoid)
+#     # We want to penalize deviation from this natural stance width
+#     target_knee_distance = 0.4  # meters
     
-    # Compute error: distance from target
-    distance_error = knee_distance - target_knee_distance
+#     # Compute error: distance from target
+#     distance_error = knee_distance - target_knee_distance
     
-    # Return negative squared error (so reward increases when knees maintain target distance)
-    return -torch.square(distance_error)
+#     # Return negative squared error (so reward increases when knees maintain target distance)
+#     return -torch.square(distance_error)
 
 
 def projectile_hit_penalty(
