@@ -20,8 +20,8 @@ from isaaclab.utils import configclass
 
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from isaaclab.envs import mdp 
-from . import mdp as local_mdp
+
+from . import mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 # print(H12_CFG_HANDLESS.spawn.usd_path)
 # exit()
@@ -156,26 +156,10 @@ class RewardsCfg:
 
     # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
-        func=local_mdp.alive_bonus,
+        func=mdp.alive_bonus,
         weight= 5.0,
         params={},
     )
-
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
-
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
-
-
-    # Penalty for moving horizontally (encourages standing still)
-    base_velocity_penalty = RewTerm(
-        func=local_mdp.base_velocity_penalty,
-        weight=-2.0,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
-
-
 
     # # Knee symmetry: encourage left and right knees to maintain similar angles
     # knee_symmetry = RewTerm(
@@ -232,7 +216,7 @@ class TerminationsCfg:
 
     # (2) Base height too low (fell down)
     base_height_low = DoneTerm(
-        func=local_mdp.base_height_below_threshold,
+        func=mdp.base_height_below_threshold,
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
     )
 
@@ -240,27 +224,3 @@ class TerminationsCfg:
 # Environment configuration
 ##
 
-
-@configclass
-class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
-    # Scene settings
-    scene: H12BulletTimeSceneCfg = H12BulletTimeSceneCfg(num_envs=4096, env_spacing=4.0)
-    # Basic settings
-    observations: ObservationsCfg = ObservationsCfg()
-    actions: ActionsCfg = ActionsCfg()
-    events: EventCfg = EventCfg()
-    # MDP settings
-    rewards: RewardsCfg = RewardsCfg()
-    terminations: TerminationsCfg = TerminationsCfg()
-
-    # Post initialization
-    def __post_init__(self) -> None:
-        """Post initialization."""
-        # general settings
-        self.decimation = 2
-        self.episode_length_s = 10  # 10 second episodes
-        # viewer settings
-        self.viewer.eye = (8.0, 0.0, 5.0)
-        # simulation settings
-        self.sim.dt = 1 / 120
-        self.sim.render_interval = self.decimation
