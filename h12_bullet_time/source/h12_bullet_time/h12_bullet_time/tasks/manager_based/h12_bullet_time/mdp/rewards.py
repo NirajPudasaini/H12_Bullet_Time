@@ -14,35 +14,25 @@ from isaaclab.envs import ManagerBasedRLEnv
 
 
 def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Bonus reward for staying alive (not falling).
-    
-    Returns +1.0 for each timestep the robot is still running.
-    """
+
     # Return constant reward per environment (batch)
     return torch.ones(env.num_envs, dtype=torch.float32, device=env.device)
 
 
-def base_velocity_penalty(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Penalty for robot moving (horizontal velocity).
-    
-    Encourages the robot to stand still by penalizing horizontal (x, y) linear velocity.
-    Z-axis (vertical) velocity is not penalized, allowing the robot to fall/stand naturally.
-    
-    Returns negative L2 norm of horizontal velocity to encourage staying still.
-    """
-    # extract robot asset
+def base_velocity_reward(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    scale: float = 10.0,
+) -> torch.Tensor:
+
     asset: Articulation = env.scene[asset_cfg.name]
-    
-    # Get root linear velocity (x, y only - ignore z for vertical velocity)
+
     lin_vel = asset.data.root_lin_vel_w[:, :2]  # shape: (num_envs, 2)
-    
-    # Compute L2 norm of horizontal velocity
-    velocity_norm = torch.norm(lin_vel, dim=1)  # shape: (num_envs,)
-    
-    # Return negative velocity norm (penalty). Higher reward when velocity is low.
-    return velocity_norm
+    vel_norm2 = torch.sum(lin_vel ** 2, dim=1)
+    reward = torch.exp(-float(scale) * vel_norm2)
 
-
+    return reward
+ 
 def projectile_hit_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
@@ -50,20 +40,7 @@ def projectile_hit_penalty(
     penalty: float = -10.0,
     threshold: float = 0.5,
 ) -> torch.Tensor:
-    """Penalty when projectile gets too close to any robot body part.
-    
-    Simple version: if projectile within threshold distance of any robot body → apply penalty.
-    
-    Args:
-        env: The environment
-        asset_cfg: Robot asset config
-        projectile_name: Name of projectile object
-        penalty: Penalty value (typically negative)
-        threshold: Distance threshold in meters
-        
-    Returns:
-        Tensor of rewards (0 or penalty value per env)
-    """
+
     # Get robot
     robot: Articulation = env.scene[asset_cfg.name]
     robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)

@@ -122,25 +122,24 @@ class ObservationsCfg:
     
     @configclass
     class CriticCfg(ObsGroup):
-        """Observations for critic group."""
-        pass
-
-    # NEED TO FIX THIS LATER ~ when adding camera depths    
-
-    #     # observation terms (order preserved)
-    #     # currently no noise added? and no scaling ?
-    #     base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
-    #     projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
-    #     joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
-    #     joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-    #     last_action = ObsTerm(func=mdp.last_action)
+        """Observations for critic group - includes privileged base velocity info."""
         
-    #     def __post_init__(self) -> None:
-    #         self.history_length = 5
-    #         self.enable_corruption = False
-    #         self.concatenate_terms = True
-    # # privileged observations
-    # critic: CriticCfg = CriticCfg()
+        # Same as policy
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+        last_action = ObsTerm(func=mdp.last_action)
+        
+        # Privileged info: linear velocity (helps critic predict stability)
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
+        
+        def __post_init__(self) -> None:
+            self.enable_corruption = False  # No corruption for critic (has privileged info)
+            self.concatenate_terms = True
+
+
+    critic: CriticCfg = CriticCfg()
 
 
 @configclass
@@ -168,11 +167,11 @@ class RewardsCfg:
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
 
 
-    # Penalty for moving horizontally (encourages standing still)
-    base_velocity_penalty = RewTerm(
-        func=local_mdp.base_velocity_penalty,
-        weight=-2.0,
-        params={"asset_cfg": SceneEntityCfg("robot")},
+    # Reward for keeping horizontal base velocity near zero (encourages standing still)
+    base_velocity_reward = RewTerm(
+        func=local_mdp.base_velocity_reward,
+        weight=10.0,
+        params={"asset_cfg": SceneEntityCfg("robot"), "scale": 100.0},
     )
 
 
