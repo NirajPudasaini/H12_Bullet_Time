@@ -3,11 +3,21 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+"""
+Curriculum Learning Configuration for H12 Bullet Time
+
+Phase 1 (Steps 0-500K): Stand/Balance only (v0)
+Phase 2 (Steps 500K+): Introduce projectiles + dodging (v1)
+
+This config starts easy and gradually introduces difficulty.
+"""
+
 import math
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.managers import CurriculumTermCfg as CurTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -23,12 +33,10 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab.envs import mdp 
 from . import mdp as local_mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
-# print(H12_CFG_HANDLESS.spawn.usd_path)
-# exit()
 
 @configclass
-class H12BulletTimeSceneCfg(InteractiveSceneCfg):
-    """Configuration for H12 Bullet Time scene with projectile dodging."""
+class H12BulletTimeSceneCfg_Curriculum(InteractiveSceneCfg):
+    """Configuration for H12 Bullet Time curriculum scene with optional projectiles."""
 
     # ground plane
     ground = AssetBaseCfg(
@@ -45,6 +53,29 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
     )
 
+    # Projectile (always in scene, but only spawned after curriculum milestone)
+    Projectile = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Projectile",
+        spawn=sim_utils.SphereCfg(
+            radius=0.075,  
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.0, 0.0, 1.0),  # Blue
+                metallic=0.2,
+            ),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                solver_position_iteration_count=4,
+                solver_velocity_iteration_count=0,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 1.0),
+            rot=(1.0, 0.0, 0.0, 0.0),
+            lin_vel=(0.0, 0.0, 0.0),
+            ang_vel=(0.0, 0.0, 0.0),
+        ),
+    )
 
 ##
 # MDP settings
@@ -53,10 +84,6 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
 @configclass
 class ActionsCfg:
     """Action specifications for the MDP."""
-
-    # H12 has 19 DOF: 6 per leg + 3 per arm (shoulder pitch/roll, elbow) + torso too ! ~ ignored wrist and shoulder yaw
-    # We control: hip yaw/pitch/roll, knee, ankle pitch/roll for each leg
-    # and shoulder pitch/roll, elbow for each arm and torso joint
 
     joint_effort = mdp.JointPositionActionCfg(
         asset_name="robot",
@@ -80,8 +107,6 @@ class ActionsCfg:
             #torso
             "torso_joint",
 
-            #wrists are ignored !! yeah dodging with upper body only no wrist movement
-            #shoulder yaw also ignored
             #Left arm
             "left_shoulder_pitch_joint", #7
             "left_shoulder_roll_joint",  #8
@@ -104,8 +129,6 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        # observation terms (order preserved)
-        # currently no noise added? and no scaling ?
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
@@ -113,47 +136,41 @@ class ObservationsCfg:
         last_action = ObsTerm(func=mdp.last_action)
         
         def __post_init__(self) -> None:
-            # self.history_length = 5
             self.enable_corruption = True
             self.concatenate_terms = True
 
-    # observation groups
     policy: PolicyCfg = PolicyCfg()
     
     @configclass
     class CriticCfg(ObsGroup):
         """Observations for critic group - includes privileged base velocity info."""
         
-        # Same as policy
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         last_action = ObsTerm(func=mdp.last_action)
         
-        # Privileged info: linear velocity (helps critic predict stability)
+        # Privileged info: linear velocity
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
         
         def __post_init__(self) -> None:
-            self.enable_corruption = False  # No corruption for critic (has privileged info)
+            self.enable_corruption = False
             self.concatenate_terms = True
-
 
     critic: CriticCfg = CriticCfg()
 
 
 @configclass
 class RewardsCfg:
-    """Reward terms for the MDP."""
 
-    # Minimal reward: maintain base height at 1.04 m
+    # Phase 1 rewards (always active): Stand and balance
     base_height = RewTerm(
         func=mdp.base_height_l2,
         weight= -10.0,
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
-    # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
         func=local_mdp.alive_bonus,
         weight= 5.0,
@@ -165,36 +182,27 @@ class RewardsCfg:
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
 
-
-    # Reward for keeping horizontal base velocity near zero (encourages standing still)
+    # Standing still reward (light)
     base_velocity_reward = RewTerm(
         func=local_mdp.base_velocity_reward,
-        weight=10.0,
+        weight=10,
         params={"asset_cfg": SceneEntityCfg("robot"), "scale": 100.0},
     )
 
-
-
-    # # Knee symmetry: encourage left and right knees to maintain similar angles
-    # knee_symmetry = RewTerm(
-    #     func=mdp.knee_symmetry,
-    #     weight= 0.2,
-    #     params={"asset_cfg": SceneEntityCfg("robot")},
-    # )
-
-    # # Penalty when projectile hits the robot (useful for simple dodge training)
-    # projectile_penalty = RewTerm(
-    #     func=mdp.projectile_hit_penalty,
-    #     weight=1.0,
-    #     params={"asset_cfg": SceneEntityCfg("robot"), "penalty": -10.0, "threshold": 0.25},
-    # )
+    # Phase 2 reward (controlled by curriculum manager, see CurriculumCfg below)
+    # Starts at weight=0.0 (Phase 1), automatically set to 1.0 at step 500K (Phase 2)
+    projectile_penalty = RewTerm(
+        func=local_mdp.projectile_hit_penalty,
+        weight=0.0,  # Initial: DISABLED in Phase 1, enabled in Phase 2 via curriculum manager
+        params={"asset_cfg": SceneEntityCfg("robot"), "projectile_name": "Projectile", "penalty": -10.0, "threshold": 0.5},
+    )
 
 
 @configclass
 class EventCfg:
     """Configuration for events."""
 
-    # Reset base position and velocity on episode reset/termination
+    # Reset base position and velocity
     reset_base = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
@@ -211,7 +219,7 @@ class EventCfg:
         },
     )
 
-    # Reset robot joints to default positions on episode reset/termination
+    # Reset robot joints
     reset_robot_joints = EventTerm(
         func=mdp.reset_joints_by_scale,
         mode="reset",
@@ -221,17 +229,48 @@ class EventCfg:
         },
     )
 
+    # Launch projectiles (activated after curriculum milestone at 700K steps)
+    # THIS MUST BE LAST so it runs after robot is reset!
+    launch_projectile = EventTerm(
+        func=local_mdp.launch_projectile,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("Projectile"),
+        },
+    )
+
+
+@configclass
+class CurriculumCfg:
+
+    # Curriculum milestone: At 500K steps, activate projectile penalty
+    projectile_penalty_curriculum = CurTerm(
+        func=local_mdp.modify_reward_weight,
+        params={
+            "term_name": "projectile_penalty",
+            "weight": 1.0,
+            "num_steps": 100,  
+        },
+    )
+
+
 @configclass
 class TerminationsCfg:
     """Termination terms for the MDP."""
 
-    # (1) Time out
+    # Time out
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    # (2) Base height too low (fell down)
+    # Base height too low (fell down)
     base_height_low = DoneTerm(
         func=local_mdp.base_height_below_threshold,
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
+    )
+
+    # Projectile hit (phase 2 only, activated at milestone)
+    projectile_hit = DoneTerm(
+        func=local_mdp.projectile_hit,
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.5},
     )
 
 ##
@@ -240,9 +279,9 @@ class TerminationsCfg:
 
 
 @configclass
-class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
+class H12BulletTimeEnvCfg_Curriculum(ManagerBasedRLEnvCfg):
     # Scene settings
-    scene: H12BulletTimeSceneCfg = H12BulletTimeSceneCfg(num_envs=4096, env_spacing=4.0)
+    scene: H12BulletTimeSceneCfg_Curriculum = H12BulletTimeSceneCfg_Curriculum(num_envs=4096, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -250,6 +289,8 @@ class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
     # MDP settings
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
+    # Curriculum settings
+    curriculum: CurriculumCfg = CurriculumCfg()
 
     # Post initialization
     def __post_init__(self) -> None:

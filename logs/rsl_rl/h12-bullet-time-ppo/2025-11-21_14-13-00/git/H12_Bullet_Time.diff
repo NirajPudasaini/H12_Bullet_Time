@@ -1,0 +1,71 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+  (commit or discard the untracked or modified content in submodules)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions (modified content, untracked content)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_curriculum.py
+	h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/curriculums.py
+	logs/
+	outputs/2025-11-21/14-12-12/
+	outputs/2025-11-21/14-13-00/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions
+@@ -1 +1 @@
+-Subproject commit 2da3c746e49fcd8a215920961250e9aeba7c32db
++Subproject commit 2da3c746e49fcd8a215920961250e9aeba7c32db-dirty
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py
+index 17ebbb5..f20e8a4 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py
+@@ -12,12 +12,23 @@ from . import agents
+ ##
+ 
+ 
++gym.register(
++    id="Template-H12-Bullet-Time-Curriculum",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_curriculum:H12BulletTimeEnvCfg_Curriculum",
++        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
++    },
++)   
++
++
+ gym.register(
+     id="Template-H12-Bullet-Time-v0",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+     disable_env_checker=True,
+     kwargs={
+-        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg:H12BulletTimeEnvCfg",
++        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg:H12BulletTimeEnvCfg"        ,
+         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+     },
+ )
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py
+index 308a0f1..6a1fe02 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py
+@@ -9,6 +9,7 @@ from isaaclab.envs.mdp import *  # noqa: F401, F403
+ 
+ from .rewards import *  # noqa: F401, F403
+ from .terminations import *  # noqa: F401, F403
++from .curriculums import *  # noqa: F401, F403
+ 
+ # export local event helpers
+ from .events import *  # noqa: F401, F403
