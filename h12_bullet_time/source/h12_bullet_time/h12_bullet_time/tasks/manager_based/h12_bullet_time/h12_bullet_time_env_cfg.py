@@ -20,8 +20,9 @@ from isaaclab.utils import configclass
 
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
+import isaaclab.envs.mdp as mdp
 
-from . import mdp
+from . import mdp as local_mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 # print(H12_CFG_HANDLESS.spawn.usd_path)
 # exit()
@@ -92,7 +93,7 @@ class ActionsCfg:
             "right_shoulder_roll_joint",   
             "right_elbow_joint",
         ],
-        scale= 0.25, # change this scaling to make it 
+        scale=0.1,  # Reduced from 0.25 to prevent aggressive movements that cause collapse 
     )
 
 
@@ -147,26 +148,27 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # Minimal reward: maintain base height at 1.04 m
+    # Gaussian reward for maintaining base height at target (1.04 m)
+    # Uses custom Gaussian function: exp(-5*error²) peaks at +1.0 at target height
     base_height = RewTerm(
-        func=mdp.base_height_l2,
-        weight= 0.5,
+        func=local_mdp.base_height_l2,
+        weight=10.0,  # POSITIVE weight for positive reward function
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
     # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
-        func=mdp.alive_bonus,
-        weight= 5.0,
+        func=local_mdp.alive_bonus,
+        weight=5.0,  # Reduced since base_height now provides strong height guidance
         params={},
     )
 
-    # Knee symmetry: encourage left and right knees to maintain similar angles
-    knee_symmetry = RewTerm(
-        func=mdp.knee_symmetry,
-        weight= 0.2,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
+    # # Knee symmetry: encourage left and right knees to maintain similar angles
+    # knee_symmetry = RewTerm(
+    #     func=local_mdp.knee_symmetry,
+    #     weight= 0.2,
+    #     params={"asset_cfg": SceneEntityCfg("robot")},
+    # )
 
     # # Penalty when projectile hits the robot (useful for simple dodge training)
     # projectile_penalty = RewTerm(
@@ -216,7 +218,7 @@ class TerminationsCfg:
 
     # (2) Base height too low (fell down)
     base_height_low = DoneTerm(
-        func=mdp.base_height_below_threshold,
+        func=local_mdp.base_height_below_threshold,
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
     )
 
@@ -242,7 +244,7 @@ class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 10  # 10 second episodes
+        self.episode_length_s = 5  # Reduced from 10 to 5 seconds to prevent falling mid-episode
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings

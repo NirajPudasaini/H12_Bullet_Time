@@ -15,7 +15,8 @@ from isaaclab.envs import ManagerBasedRLEnv
 def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """Reward for maintaining base height close to target (default 1.0 m).
     
-    Returns negative L2 distance from target height so higher is better.
+    Returns positive reward when at target height, negative penalty when deviating.
+    This uses a Gaussian-like reward that peaks at the target height.
     """
     # extract robot asset
     asset: Articulation = env.scene[asset_cfg.name]
@@ -23,8 +24,9 @@ def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: Scen
     base_height = asset.data.body_pos_w[:, 0, 2]
     # compute L2 distance from target
     height_error = base_height - target_height
-    # return negative squared error (so reward decreases as height deviates)
-    return -torch.square(height_error)
+    # return Gaussian reward: exp(-squared_error) so reward is +1.0 at target, approaches 0 when deviating
+    # this is better than negative squared error which gives penalty everywhere
+    return torch.exp(-torch.square(height_error) * 5.0)  # scaling factor of 5.0 makes the curve steeper
 
 
 def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
@@ -76,20 +78,7 @@ def projectile_hit_penalty(
     penalty: float = -10.0,
     threshold: float = 0.5,
 ) -> torch.Tensor:
-    """Penalty when projectile gets too close to any robot body part.
-    
-    Simple version: if projectile within threshold distance of any robot body → apply penalty.
-    
-    Args:
-        env: The environment
-        asset_cfg: Robot asset config
-        projectile_name: Name of projectile object
-        penalty: Penalty value (typically negative)
-        threshold: Distance threshold in meters
-        
-    Returns:
-        Tensor of rewards (0 or penalty value per env)
-    """
+
     # Get robot
     robot: Articulation = env.scene[asset_cfg.name]
     robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)

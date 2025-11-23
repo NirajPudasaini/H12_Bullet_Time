@@ -1,0 +1,148 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	logs/
+	outputs/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py
+index fcd98a5..fcef5e4 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py
+@@ -64,7 +64,9 @@ H12_CFG_HANDLESS = ArticulationCfg(
+         replace_cylinders_with_capsules=True,
+ 
+        # asset_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_handless.urdf",
+-        asset_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf",
++       
++        #laptop path
++        asset_path= "/home/niraj/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf",
+ 
+         activate_contact_sensors=True,
+ 
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py
+index ef7cd34..c2bca8c 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py
+@@ -20,8 +20,9 @@ from isaaclab.utils import configclass
+ 
+ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+ 
++import isaaclab.envs.mdp as mdp
+ 
+-from . import mdp
++from . import mdp as local_mdp
+ from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
+ # print(H12_CFG_HANDLESS.spawn.usd_path)
+ # exit()
+@@ -147,23 +148,23 @@ class ObservationsCfg:
+ class RewardsCfg:
+     """Reward terms for the MDP."""
+ 
+-    # Minimal reward: maintain base height at 1.04 m
++    # Penalty for base height deviation (negative weight converts penalty to reward)
+     base_height = RewTerm(
+         func=mdp.base_height_l2,
+-        weight= 0.5,
++        weight=-10.0, 
+         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
+     )
+ 
+     # Alive bonus: reward for staying alive (not falling)
+     alive_bonus = RewTerm(
+-        func=mdp.alive_bonus,
++        func=local_mdp.alive_bonus,
+         weight= 5.0,
+         params={},
+     )
+ 
+     # Knee symmetry: encourage left and right knees to maintain similar angles
+     knee_symmetry = RewTerm(
+-        func=mdp.knee_symmetry,
++        func=local_mdp.knee_symmetry,
+         weight= 0.2,
+         params={"asset_cfg": SceneEntityCfg("robot")},
+     )
+@@ -216,7 +217,7 @@ class TerminationsCfg:
+ 
+     # (2) Base height too low (fell down)
+     base_height_low = DoneTerm(
+-        func=mdp.base_height_below_threshold,
++        func=local_mdp.base_height_below_threshold,
+         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
+     )
+ 
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py
+index 736c0e1..7d59751 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py
+@@ -12,19 +12,21 @@ from isaaclab.managers import SceneEntityCfg
+ 
+ from isaaclab.envs import ManagerBasedRLEnv
+ 
+-def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+-    """Reward for maintaining base height close to target (default 1.0 m).
+-    
+-    Returns negative L2 distance from target height so higher is better.
+-    """
+-    # extract robot asset
+-    asset: Articulation = env.scene[asset_cfg.name]
+-    # get base height (z-position of root body)
+-    base_height = asset.data.body_pos_w[:, 0, 2]
+-    # compute L2 distance from target
+-    height_error = base_height - target_height
+-    # return negative squared error (so reward decreases as height deviates)
+-    return -torch.square(height_error)
++# def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
++#     """Reward for maintaining base height close to target (default 1.0 m).
++    
++#     Returns positive reward when at target height, negative penalty when deviating.
++#     This uses a Gaussian-like reward that peaks at the target height.
++#     """
++#     # extract robot asset
++#     asset: Articulation = env.scene[asset_cfg.name]
++#     # get base height (z-position of root body)
++#     base_height = asset.data.body_pos_w[:, 0, 2]
++#     # compute L2 distance from target
++#     height_error = base_height - target_height
++#     # return Gaussian reward: exp(-squared_error) so reward is +1.0 at target, approaches 0 when deviating
++#     # this is better than negative squared error which gives penalty everywhere
++#     return torch.exp(-torch.square(height_error) * 5.0)  # scaling factor of 5.0 makes the curve steeper
+ 
+ 
+ def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
+@@ -76,20 +78,7 @@ def projectile_hit_penalty(
+     penalty: float = -10.0,
+     threshold: float = 0.5,
+ ) -> torch.Tensor:
+-    """Penalty when projectile gets too close to any robot body part.
+-    
+-    Simple version: if projectile within threshold distance of any robot body → apply penalty.
+-    
+-    Args:
+-        env: The environment
+-        asset_cfg: Robot asset config
+-        projectile_name: Name of projectile object
+-        penalty: Penalty value (typically negative)
+-        threshold: Distance threshold in meters
+-        
+-    Returns:
+-        Tensor of rewards (0 or penalty value per env)
+-    """
++
+     # Get robot
+     robot: Articulation = env.scene[asset_cfg.name]
+     robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)
