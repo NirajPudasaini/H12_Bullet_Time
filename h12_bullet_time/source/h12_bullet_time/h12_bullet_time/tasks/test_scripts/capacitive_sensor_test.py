@@ -63,12 +63,13 @@ class CapacitiveSensorSceneCfg(InteractiveSceneCfg):
 
     # Custom Capacitive Sensor
     capacitive_sensor_1 = CapacitiveSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Projectile",
+        prim_path="{ENV_REGEX_NS}/Robot/torso_link",
         target_frames=[
-            CapacitiveSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Robot/torso_link"),
+            CapacitiveSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
         ],
-        relative_sensor_pos=[(0.0, 0.0, 0.0), (0.5, 0.0, 0.0)],
+        relative_sensor_pos=[(0.0, 0.0, 0.0), (0.1, 0.0, 0.0), (0.2, 0.0, 0.0), (0.3, 0.0, 0.0)],
         debug_vis=True,
+        max_range=0.5, # meters
     )
 
     # Moving cube
@@ -79,6 +80,7 @@ class CapacitiveSensorSceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
         ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(1.0, 0.0, 0.15)),
     )
 
 
@@ -110,7 +112,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
         # Move cube in sine wave motion
         cube_prim = scene["moving_cube"]
-        cube_pos = torch.tensor([[np.sin(sim_time) * 1.0, 0.0, 0.15]], dtype=torch.float32)  # 0.15 = half of cube height
+        cube_pos = torch.tensor([[1.0, 0.0, 0.15]], dtype=torch.float32)  # 0.15 = half of cube height
         # Use identity quaternion for orientation
         cube_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32)  # [w, x, y, z]
         cube_prim.set_world_poses(positions=cube_pos, orientations=cube_quat)
@@ -129,6 +131,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         # Debug visualization
         capacitive_data_1 = scene["capacitive_sensor_1"].data
         print("distances:", capacitive_data_1.target_distances)
+        print("capacitance values:", capacitive_data_1.capacitance_values)
 
 
     print("[INFO]: Simulation finished.")

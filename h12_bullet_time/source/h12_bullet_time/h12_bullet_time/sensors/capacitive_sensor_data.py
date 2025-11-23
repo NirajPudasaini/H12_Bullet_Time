@@ -68,3 +68,10 @@ class CapacitiveSensorData:
     Shape is (N, S, M, 3), where N is the number of environments, S is the number of sensor offsets,
     and M is the number of target frames.
     """
+
+    capacitance_values: torch.Tensor = None
+    """simulated capacitance values of each sensor.
+
+    Shape is (N, S, M), where N is the number of environments, S is the number of sensors,
+    and M is the number of target frames.
+    """

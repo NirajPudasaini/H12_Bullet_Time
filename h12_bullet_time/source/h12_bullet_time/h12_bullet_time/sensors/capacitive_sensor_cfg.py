@@ -71,6 +71,14 @@ class CapacitiveSensorCfg(FrameTransformerCfg):
     When a distance to a target is computed, the distances will be computed from the relative positions of the sensors to the target in the world frame.
     """
 
+    max_range: float = 0.15 # meters. This is the point where SNR becomes <= 3.5
+    max_SNR: float = 100.0 # dB
+    k_factor: float = 1.0 # emperically derived parallel plate capacitor constant
+    """
+    Parameter to adjust the sensitivity of the sensor. C = k/d.
+    """
+
+
     visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/CapacitiveSensor")
     """The configuration object for the visualization markers. Defaults to FRAME_MARKER_CFG.
 

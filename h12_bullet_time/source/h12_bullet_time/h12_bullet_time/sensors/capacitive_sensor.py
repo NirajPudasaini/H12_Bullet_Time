@@ -370,6 +370,9 @@ class CapacitiveSensor(SensorBase):
         self._data.target_pos_sensor = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), 3, device=self._device
         )
+        self._data.capacitance_values = torch.zeros(
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
+        )
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
         """Fills the buffers of the sensor data."""
@@ -435,6 +438,13 @@ class CapacitiveSensor(SensorBase):
         )
         normalized_distances = torch.linalg.norm(target_pos_sensor, dim=-1)
 
+        ############### Capacitance simulation ###############
+
+        # Extremely basic and non-realistic linear sensor: Just used for debugging.
+        capacitance_values = torch.clamp(-(1/self.cfg.max_range) * normalized_distances + 1, min=0.0) * self.cfg.max_SNR
+
+        ######################################################
+
         # Update buffers
         # note: The frame names / ordering don't change so no need to update them after initialization
         self._data.source_pos_w[:] = source_pos_w.view(-1, 3)
@@ -445,6 +455,7 @@ class CapacitiveSensor(SensorBase):
         self._data.target_quat_source[:] = target_quat_source.view(-1, total_num_frames, 4)
         self._data.target_distances[:] = normalized_distances
         self._data.target_pos_sensor[:] = target_pos_sensor
+        self._data.capacitance_values[:] = capacitance_values
 
 
     def _set_debug_vis_impl(self, debug_vis: bool):
