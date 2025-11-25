@@ -79,11 +79,7 @@ class H12BulletTimeSceneCfg_v1(InteractiveSceneCfg):
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    # H12 has 19 DOF: 6 per leg + 3 per arm (shoulder pitch/roll, elbow) + torso too ! ~ ignored wrist and shoulder yaw
-    # We control: hip yaw/pitch/roll, knee, ankle pitch/roll for each leg
-    # and shoulder pitch/roll, elbow for each arm and torso joint
-
-    joint_effort = mdp.JointEffortActionCfg(
+    joint_effort = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[
             # Left leg
@@ -129,8 +125,6 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        # observation terms (order preserved)
-        # currently no noise added? and no scaling ?
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
@@ -138,7 +132,7 @@ class ObservationsCfg:
         last_action = ObsTerm(func=mdp.last_action)
         
         def __post_init__(self) -> None:
-            self.history_length = 5
+           # self.history_length = 5
             self.enable_corruption = False
             self.concatenate_terms = True
 
@@ -172,7 +166,7 @@ class ObservationsCfg:
         )
         
         def __post_init__(self) -> None:
-            self.history_length = 5  
+         #   self.history_length = 5  
             self.enable_corruption = False
             self.concatenate_terms = True
 
@@ -185,11 +179,11 @@ class RewardsCfg:
     """Reward terms for the MDP."""
 
     # Minimal reward: maintain base height at 1.04 m
-    base_height = RewTerm(
-        func=mdp.base_height_l2,
-        weight= 0.1,
-        params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
-    )
+    # base_height = RewTerm(
+    #     func=mdp.base_height_l2,
+    #     weight= 0.1,
+    #     params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
+    # )
 
     # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
@@ -198,12 +192,12 @@ class RewardsCfg:
         params={},
     )
 
-    # Knee symmetry: encourage left and right knees to maintain similar angles
-    knee_symmetry = RewTerm(
-        func=mdp.knee_symmetry,
-        weight= 0.1,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
+    # # Knee symmetry: encourage left and right knees to maintain similar angles
+    # knee_symmetry = RewTerm(
+    #     func=mdp.knee_symmetry,
+    #     weight= 0.1,
+    #     params={"asset_cfg": SceneEntityCfg("robot")},
+    # )
 
     # Penalty when projectile hits the robot (useful for simple dodge training)
     projectile_penalty = RewTerm(
@@ -222,7 +216,7 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+            "pose_range": {"x": (-0.0, 0.0), "y": (-0.0, 0.0), "yaw": (0, 0)},
             "velocity_range": {
                 "x": (0.0, 0.0),
                 "y": (0.0, 0.0),

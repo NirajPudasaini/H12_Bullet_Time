@@ -77,3 +77,23 @@ def projectile_hit(
         hit = hit | (min_dist_per_env < float(threshold))
             
     return hit
+
+
+def projectile_hit_after_steps(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    projectile_names: list | None = None,
+    threshold: float = 0.1,
+    start_step: int = 2000,
+) -> torch.Tensor:
+    """Return hit mask only after `start_step` training iterations.
+
+    Before `start_step`, this returns all-false so termination is disabled.
+    After `start_step`, delegates to `projectile_hit` to compute per-env hits.
+    """
+    # Use env.common_step_counter (training iterations) to gate termination
+    if getattr(env, "common_step_counter", 0) < int(start_step):
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    # Delegate to existing projectile_hit implementation
+    return projectile_hit(env, asset_cfg, projectile_names=projectile_names, threshold=threshold)
