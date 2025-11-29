@@ -19,7 +19,9 @@ __all__ = [
     "projectile_hit_penalty",
     "projectile_proximity_penalty",
     "projectile_distance",
+    "projectile_contact_penalty",
     "torso_pitch_curriculum",
+    "torso_pitch_reward",
 ]
 
 
@@ -118,6 +120,60 @@ def projectile_hit_penalty(
     return reward
 
 
+def projectile_contact_penalty(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    projectile_name: str = "Projectile",
+    contact_threshold: float = 0.05,
+    penalty: float = -500.0,
+) -> torch.Tensor:
+    """High-magnitude penalty when projectile is in contact (within threshold) with any robot body/link.
+
+    This function is reactive (checks proximity) but designed to produce a large negative
+    scalar that discourages the agent from making contact with the projectile.
+    """
+    # Get robot body positions
+    robot: Articulation = env.scene[asset_cfg.name]
+    try:
+        robot_body_positions = robot.data.body_pos_w  # (num_envs, num_bodies, 3)
+    except Exception:
+        # If body positions are not available, return zeros
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    # Get projectile
+    scene_names = list(env.scene.keys())
+    candidates = [] if projectile_name is None else [projectile_name]
+    if projectile_name is None:
+        for n in scene_names:
+            if "projectile" in n.lower() or "obstacle" in n.lower():
+                candidates.append(n)
+
+    if len(candidates) == 0:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    penalty_tensor = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    for name in candidates:
+        obj = env.scene[name]
+        try:
+            proj_pos = obj.data.root_pos_w  # (num_envs, 3)
+        except Exception:
+            try:
+                proj_pos = obj.data.body_pos_w[:, 0, :]
+            except Exception:
+                continue
+
+        # Compute distances to all robot bodies
+        distances = torch.norm(robot_body_positions - proj_pos.unsqueeze(1), dim=-1)  # (num_envs, num_bodies)
+        min_dist = distances.min(dim=1)[0]
+
+        hit_mask = min_dist < float(contact_threshold)
+        if hit_mask.any():
+            penalty_tensor[hit_mask] = float(penalty)
+
+    return penalty_tensor
+
+
 def projectile_proximity_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
@@ -126,11 +182,9 @@ def projectile_proximity_penalty(
     penalty_scale: float = -1.0,
     approach_gain: float = 2.0,
 ) -> torch.Tensor:
-
     # Get robot
     robot: Articulation = env.scene[asset_cfg.name]
-    robot_pos = robot.data.root_pos_w[:, :3]  # shape: (num_envs, 3)
-    
+
     # Get projectile
     try:
         projectile = env.scene[projectile_name]
@@ -138,42 +192,86 @@ def projectile_proximity_penalty(
     except (KeyError, AttributeError):
         # Projectile not found, no penalty
         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
-    
-    # Compute distance from projectile to robot base
-    rel = proj_pos - robot_pos
-    distance = torch.norm(rel, dim=-1)  # shape: (num_envs,)
 
-    # Compute approach speed: projection of relative velocity onto relative vector
-    # proj_lin_vel: (num_envs, 3)
-    proj_lin_vel = projectile.data.root_lin_vel_w
-    # robot base linear velocity (world frame)
+    # Build a list of robot link positions to consider for proximity checks.
+    # Include base/root plus important upper-body links so the robot fully avoids obstacles.
+    positions_list = []
+    # root/base position (index 0)
     try:
-        robot_lin_vel = robot.data.root_lin_vel_w
+        root_pos = robot.data.root_pos_w[:, :3]
+        positions_list.append(root_pos.unsqueeze(1))  # (num_envs, 1, 3)
     except Exception:
-        robot_lin_vel = torch.zeros_like(proj_lin_vel)
+        # Fallback to zeros if unavailable
+        positions_list.append(torch.zeros((env.num_envs, 1, 3), device=env.device, dtype=torch.float32))
 
-    # Relative velocity of projectile w.r.t robot base
-    rel_vel = proj_lin_vel - robot_lin_vel  # (num_envs, 3)
+    # Preferred link names to check (as requested by user)
+    link_names_to_check = [
+        "left_elbow_link",
+        "right_elbow_link",
+        "left_shoulder_yaw_link",
+        "right_shoulder_yaw_link",
+        # Lidar mounted on torso (protect sensor)
+        "lidar_link",
+    ]
 
-    eps = 1e-6
-    # unit direction from robot -> projectile: avoid division by zero
-    dir_unit = rel / (distance.unsqueeze(-1) + eps)
-    # approach_speed = -dot(rel_vel, dir_unit) so positive when projectile moves toward robot
-    approach_speed = -torch.sum(rel_vel * dir_unit, dim=-1)  # (num_envs,)
-    approach_speed_clamped = torch.clamp(approach_speed, min=0.0)
+    # Robot may expose body/link names via "body_names" attribute
+    body_names = []
+    try:
+        body_names = list(robot.body_names)
+    except Exception:
+        body_names = []
 
-    # Base linear penalty: ramps from 0 at max_distance to penalty_scale at distance=0
-    base_penalty = float(penalty_scale) * (1.0 - distance / float(max_distance))
-    base_penalty = torch.clamp(base_penalty, min=float(penalty_scale), max=0.0)
+    # Track which appended index corresponds to which link name so we can
+    # apply link-specific amplifications (e.g., for `lidar_link`).
+    link_indices: dict = {}
 
-    # Boost penalty when projectile is approaching: factor = 1 + approach_gain * (approach_speed / (1 + approach_speed))
-    # This keeps the boost bounded while growing with approach speed.
-    approach_factor = 1.0 + float(approach_gain) * (approach_speed_clamped / (1.0 + approach_speed_clamped))
+    # For each requested link, if present, append its world position
+    for ln in link_names_to_check:
+        if ln in body_names:
+            idx = body_names.index(ln)
+            link_pos = robot.data.body_pos_w[:, idx, :]
+            # current index in concatenated positions will be len(positions_list)
+            link_indices[ln] = len(positions_list)
+            positions_list.append(link_pos.unsqueeze(1))
 
-    penalty = base_penalty * approach_factor
+    # Concatenate positions -> (num_envs, n_links, 3)
+    positions = torch.cat(positions_list, dim=1)
 
-    # For distances beyond max_distance, ensure penalty is zero
-    penalty = torch.where(distance >= float(max_distance), torch.zeros_like(penalty), penalty)
+    # Compute relative vectors from each considered link to projectile: (num_envs, n_links, 3)
+    rel = proj_pos.unsqueeze(1) - positions
+    distances = torch.norm(rel, dim=-1)  # (num_envs, n_links)
+
+    # Base penalty per link: purely distance-based (no approach-speed term)
+    # Linear ramp from 0 at max_distance to penalty_scale at distance=0
+    base_penalty_each = float(penalty_scale) * (1.0 - distances / float(max_distance))
+    base_penalty_each = torch.clamp(base_penalty_each, min=float(penalty_scale), max=0.0)
+
+    # Zero out penalties beyond max_distance per link
+    penalty_each = torch.where(distances >= float(max_distance), torch.zeros_like(base_penalty_each), base_penalty_each)
+
+    # Amplify penalty for lidar_link if present: we care strongly about the lidar
+    # being hit or closely approached (sensor protection). Multiply the per-link
+    # penalty by a factor so that close approaches to `lidar_link` are punished
+    # more heavily than other links. This only affects that link's penalty;
+    # the overall penalty still uses the minimum-distance link.
+    try:
+        if "lidar_link" in link_indices:
+            lidar_idx = link_indices["lidar_link"]
+            # Make lidar penalty more severe. Factor selected empirically —
+            # increase if you want even stronger protection.
+            lidar_factor = 3.0
+            lidar_pen = penalty_each[:, lidar_idx] * float(lidar_factor)
+            # Clamp to penalty_scale min (can't exceed the configured worst penalty)
+            lidar_pen = torch.clamp(lidar_pen, min=float(penalty_scale), max=0.0)
+            penalty_each[:, lidar_idx] = lidar_pen
+    except Exception:
+        # If anything goes wrong with link indexing, fall back silently.
+        pass
+
+    # Select the minimum distance link per environment (the one that matters most)
+    min_idx = distances.argmin(dim=1)  # (num_envs,)
+    batch_idx = torch.arange(env.num_envs, device=env.device)
+    penalty = penalty_each[batch_idx, min_idx]
 
     return penalty
 
@@ -250,4 +348,78 @@ def torso_pitch_curriculum(
     
     # Return same scale for all environments
     return torch.full((env.num_envs,), scale, dtype=torch.float32, device=env.device)
+
+
+def torso_pitch_reward(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    torso_link_name: str = "torso_link",
+    head_link_candidates: list | None = None,
+    scale: float = 5.0,
+    max_pitch: float = 0.8,
+) -> torch.Tensor:
+    """Encourage torso pitch (bending) by rewarding absolute pitch angle.
+
+    This function attempts to compute a pitch estimate for the torso by
+    finding a second link to compute a torso-to-head vector (preferred
+    candidates are provided). If a quaternion is available for the torso
+    body, it would be preferable, but to keep this robust across different
+    Articulation representations we compute pitch from link positions when
+    possible.
+
+    Returns a per-environment scalar reward encouraging larger absolute
+    torso pitch up to `max_pitch` (radians). The reward is scaled by
+    `scale` and clipped.
+    """
+    robot: Articulation = env.scene[asset_cfg.name]
+
+    # Default candidate head links if none provided
+    if head_link_candidates is None:
+        head_link_candidates = ["head_link", "neck_link", "lidar_link"]
+
+    # Resolve body names
+    try:
+        body_names = list(robot.body_names)
+    except Exception:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    if torso_link_name not in body_names:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    torso_idx = body_names.index(torso_link_name)
+
+    # Choose the first available candidate link to estimate pitch direction
+    other_idx = None
+    for cand in head_link_candidates:
+        if cand in body_names and cand != torso_link_name:
+            other_idx = body_names.index(cand)
+            break
+
+    # Need positions for torso and other link
+    try:
+        torso_pos = robot.data.body_pos_w[:, torso_idx, :]  # (num_envs, 3)
+    except Exception:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    if other_idx is None:
+        # No secondary link available; cannot estimate pitch reliably
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    try:
+        other_pos = robot.data.body_pos_w[:, other_idx, :]
+    except Exception:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    # Vector from torso to other link
+    v = other_pos - torso_pos  # (num_envs, 3)
+    horiz = torch.sqrt(v[:, 0] ** 2 + v[:, 1] ** 2) + 1e-8
+    pitch = torch.atan2(v[:, 2], horiz)  # radians; positive = up
+
+    # Reward absolute pitch (encourage bending away from upright). Clip to max_pitch
+    abs_pitch = torch.clamp(torch.abs(pitch), max=float(max_pitch))
+
+    # Scale to reward range
+    reward = float(scale) * (abs_pitch / float(max_pitch))
+
+    return reward.to(device=env.device)
 

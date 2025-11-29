@@ -20,10 +20,12 @@ def launch_projectile(
 
     # Parameters (defaults chosen to spawn relative to torso link)
     spawn_distance = 1.5
-    height_offset = 1.0  # 30 cm above the specified robot link
+    height_offset = 0.85
     throw_speed = 5.0
-    offset_range_x = 0.2
-    offset_range_z = 0.2
+    offset_range_x = 1.0
+    offset_range_z = 0.1
+    # Randomization: allow +/-20% variation on spawn_distance and height_offset per env
+    var_frac = 0.2  # 20%
 
     # Get projectile and robot from scene
     proj = env.scene[asset_cfg.name]
@@ -49,14 +51,22 @@ def launch_projectile(
     n = env_ids.numel()
 
     # Random offsets
-    x_offset = torch.rand((n,), device=device, dtype=torch.float32) * 2 * offset_range_x - offset_range_x
+    # x_offset only to the right: sample in [0, offset_range_x]
+    x_offset = torch.rand((n,), device=device, dtype=torch.float32) * offset_range_x
     z_offset = torch.rand((n,), device=device, dtype=torch.float32) * 2 * offset_range_z - offset_range_z
+
+    # Per-env random scaling in [1-0.2, 1+0.2]
+    sd_scale = 1.0 + (torch.rand((n,), device=device, dtype=torch.float32) * 2.0 * var_frac - var_frac)
+    ho_scale = 1.0 + (torch.rand((n,), device=device, dtype=torch.float32) * 2.0 * var_frac - var_frac)
+    spawn_distance_per_env = spawn_distance * sd_scale
+    height_offset_per_env = height_offset * ho_scale
 
     # Spawn position: in front of link and height offset above link
     spawn_pos = torch.zeros((n, 3), device=device, dtype=torch.float32)
-    spawn_pos[:, 0] = center[:, 0] + spawn_distance + x_offset
+    # apply per-env spawn distance and height offset with random +/-20% variation
+    spawn_pos[:, 0] = center[:, 0] + spawn_distance_per_env + x_offset
     spawn_pos[:, 1] = center[:, 1]
-    spawn_pos[:, 2] = center[:, 2] + height_offset + z_offset
+    spawn_pos[:, 2] = center[:, 2] + height_offset_per_env + z_offset
 
     # Identity quaternion
     quats = torch.zeros((n, 4), device=device, dtype=torch.float32)

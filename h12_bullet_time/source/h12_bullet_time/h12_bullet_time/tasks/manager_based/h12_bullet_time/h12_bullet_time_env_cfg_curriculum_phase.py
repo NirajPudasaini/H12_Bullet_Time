@@ -217,6 +217,18 @@ class RewardsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "scale": 100.0},
     )
 
+    # # Encourage torso pitching so the robot can dodge by bending its torso.
+    # torso_pitch = RewTerm(
+    #     func=local_mdp.torso_pitch_reward,
+    #     weight=3.0,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #         "torso_link_name": "torso_link",
+    #         "max_pitch": 0.8,
+    #         "scale": 5.0,
+    #     },
+    # )
+
     # Phase 2 reward (controlled by curriculum manager, see CurriculumCfg below)
     # Starts at weight=0.0 (Phase 1), automatically set to 1.0 at step 500K (Phase 2)
     projectile_penalty = RewTerm(
@@ -226,7 +238,7 @@ class RewardsCfg:
             "asset_cfg": SceneEntityCfg("robot"),
             "projectile_name": "Projectile",
             "max_distance": 3.0,
-            "penalty_scale": -10.0,  # Strong negative penalty when close
+            "penalty_scale": -30.0,  # Strong negative penalty when close
         },
     )
 
