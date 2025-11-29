@@ -1,8 +1,3 @@
-"""Minimal reward functions for Phase 1 (standing).
-
-These functions provide simple scalar rewards so the environment can start and
-the curriculum logic can operate. Replace with more sophisticated terms later.
-"""
 from __future__ import annotations
 
 import torch
@@ -74,21 +69,7 @@ def projectile_hit_penalty(
     penalty: float = -10.0,
     threshold: float = 0.5,
 ) -> torch.Tensor:
-    """Penalty for projectile hitting robot (binary collision penalty).
-    
-    Only triggers when projectile gets within threshold distance of robot body.
-    Useful as a hard constraint in Phase 2b after robot learns to dodge.
-    
-    Args:
-        env: RL environment
-        asset_cfg: Robot entity config
-        projectile_name: Name of projectile entity
-        penalty: Reward value when hit (negative, e.g., -10.0)
-        threshold: Distance threshold for collision (meters)
-    
-    Returns:
-        Tensor of shape (num_envs,) with penalty if hit, 0 otherwise
-    """
+
     # Get robot
     robot: Articulation = env.scene[asset_cfg.name]
     robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)
@@ -120,58 +101,54 @@ def projectile_hit_penalty(
     return reward
 
 
-def projectile_contact_penalty(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg,
-    projectile_name: str = "Projectile",
-    contact_threshold: float = 0.05,
-    penalty: float = -500.0,
-) -> torch.Tensor:
-    """High-magnitude penalty when projectile is in contact (within threshold) with any robot body/link.
+# def projectile_contact_penalty(
+#     env: ManagerBasedRLEnv,
+#     asset_cfg: SceneEntityCfg,
+#     projectile_name: str = "Projectile",
+#     contact_threshold: float = 0.05,
+#     penalty: float = -500.0,
+# ) -> torch.Tensor:
 
-    This function is reactive (checks proximity) but designed to produce a large negative
-    scalar that discourages the agent from making contact with the projectile.
-    """
-    # Get robot body positions
-    robot: Articulation = env.scene[asset_cfg.name]
-    try:
-        robot_body_positions = robot.data.body_pos_w  # (num_envs, num_bodies, 3)
-    except Exception:
-        # If body positions are not available, return zeros
-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+#     # Get robot body positions
+#     robot: Articulation = env.scene[asset_cfg.name]
+#     try:
+#         robot_body_positions = robot.data.body_pos_w  # (num_envs, num_bodies, 3)
+#     except Exception:
+#         # If body positions are not available, return zeros
+#         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
 
-    # Get projectile
-    scene_names = list(env.scene.keys())
-    candidates = [] if projectile_name is None else [projectile_name]
-    if projectile_name is None:
-        for n in scene_names:
-            if "projectile" in n.lower() or "obstacle" in n.lower():
-                candidates.append(n)
+#     # Get projectile
+#     scene_names = list(env.scene.keys())
+#     candidates = [] if projectile_name is None else [projectile_name]
+#     if projectile_name is None:
+#         for n in scene_names:
+#             if "projectile" in n.lower() or "obstacle" in n.lower():
+#                 candidates.append(n)
 
-    if len(candidates) == 0:
-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+#     if len(candidates) == 0:
+#         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
 
-    penalty_tensor = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+#     penalty_tensor = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
 
-    for name in candidates:
-        obj = env.scene[name]
-        try:
-            proj_pos = obj.data.root_pos_w  # (num_envs, 3)
-        except Exception:
-            try:
-                proj_pos = obj.data.body_pos_w[:, 0, :]
-            except Exception:
-                continue
+#     for name in candidates:
+#         obj = env.scene[name]
+#         try:
+#             proj_pos = obj.data.root_pos_w  # (num_envs, 3)
+#         except Exception:
+#             try:
+#                 proj_pos = obj.data.body_pos_w[:, 0, :]
+#             except Exception:
+#                 continue
 
-        # Compute distances to all robot bodies
-        distances = torch.norm(robot_body_positions - proj_pos.unsqueeze(1), dim=-1)  # (num_envs, num_bodies)
-        min_dist = distances.min(dim=1)[0]
+#         # Compute distances to all robot bodies
+#         distances = torch.norm(robot_body_positions - proj_pos.unsqueeze(1), dim=-1)  # (num_envs, num_bodies)
+#         min_dist = distances.min(dim=1)[0]
 
-        hit_mask = min_dist < float(contact_threshold)
-        if hit_mask.any():
-            penalty_tensor[hit_mask] = float(penalty)
+#         hit_mask = min_dist < float(contact_threshold)
+#         if hit_mask.any():
+#             penalty_tensor[hit_mask] = float(penalty)
 
-    return penalty_tensor
+#     return penalty_tensor
 
 
 def projectile_proximity_penalty(
