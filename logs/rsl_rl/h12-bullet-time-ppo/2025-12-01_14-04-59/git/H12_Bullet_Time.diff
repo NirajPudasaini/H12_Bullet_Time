@@ -1,0 +1,2367 @@
+--- git status ---
+On branch carson_sensors
+Your branch is up to date with 'origin/carson_sensors'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+  (commit or discard the untracked or modified content in submodules)
+	modified:   h12_bullet_time/scripts/test_scripts/load_urdf_links.py
+	modified:   h12_bullet_time/scripts/test_scripts/tof_sensor_readings.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions (modified content, untracked content)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_curriculum.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_v1.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/terminations.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/launch_projectile.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/multi_asset.py
+	deleted:    test_penalty_debug.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-01_14-04-59/
+	outputs/2025-12-01/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/scripts/test_scripts/load_urdf_links.py b/h12_bullet_time/scripts/test_scripts/load_urdf_links.py
+index cde2d34..e69de29 100644
+--- a/h12_bullet_time/scripts/test_scripts/load_urdf_links.py
++++ b/h12_bullet_time/scripts/test_scripts/load_urdf_links.py
+@@ -1,46 +0,0 @@
+-#!/usr/bin/env python3
+-"""Simple script to load H1-2 URDF and print all links."""
+-
+-import xml.etree.ElementTree as ET
+-
+-# Path to the URDF file
+-urdf_path = "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf"
+-
+-try:
+-    # Parse the URDF XML
+-    tree = ET.parse(urdf_path)
+-    root = tree.getroot()
+-    
+-    print("=" * 80)
+-    print(f"URDF File: {urdf_path}")
+-    print("=" * 80)
+-    
+-    # Get all links
+-    links = root.findall('link')
+-    print(f"\nTotal Links: {len(links)}\n")
+-    
+-    print("Link Names:")
+-    print("-" * 80)
+-    for i, link in enumerate(links, 1):
+-        link_name = link.get('name')
+-        print(f"{i:3d}. {link_name}")
+-    
+-    # Get all joints
+-    joints = root.findall('joint')
+-    print(f"\n\nTotal Joints: {len(joints)}\n")
+-    
+-    print("Joint Names and Types:")
+-    print("-" * 80)
+-    for i, joint in enumerate(joints, 1):
+-        joint_name = joint.get('name')
+-        joint_type = joint.get('type')
+-        parent = joint.find('parent').get('link')
+-        child = joint.find('child').get('link')
+-        print(f"{i:3d}. {joint_name:40s} ({joint_type:10s}) {parent} → {child}")
+-    
+-    print("\n" + "=" * 80)
+-
+-except Exception as e:
+-    print(f"Error: {e}")
+-    import traceback
+-    traceback.print_exc()
+diff --git a/h12_bullet_time/scripts/test_scripts/tof_sensor_readings.py b/h12_bullet_time/scripts/test_scripts/tof_sensor_readings.py
+index c42274e..d40c195 100644
+--- a/h12_bullet_time/scripts/test_scripts/tof_sensor_readings.py
++++ b/h12_bullet_time/scripts/test_scripts/tof_sensor_readings.py
+@@ -11,11 +11,18 @@ import numpy as np
+ from pathlib import Path
+ import xml.etree.ElementTree as ET
+ 
+-# URDF path
+-urdf_path = Path(__file__).parent.parent.parent / "source" / "h12_bullet_time" / "h12_bullet_time" / "assets" / "robots" / "gentact_descriptions" / "robots" / "h1-2" / "h1_2_torso_skin.urdf"
++# Launch Isaac Sim FIRST before importing anything from isaaclab
++from isaaclab.app import AppLauncher
++
++app_launcher = AppLauncher(headless=False)
++app = app_launcher.app
++
++# NOW we can import from h12_bullet_time (after app is launched)
++from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
++urdf_path = H12_CFG_HANDLESS.spawn.asset_path
+ 
+ print(f"Loading URDF from: {urdf_path}")
+-print(f"URDF exists: {urdf_path.exists()}")
++print(f"URDF exists: {Path(urdf_path).exists()}")
+ 
+ # Parse URDF directly to extract sensor link definitions
+ tree = ET.parse(str(urdf_path))
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions
+@@ -1 +1 @@
+-Subproject commit 2da3c746e49fcd8a215920961250e9aeba7c32db
++Subproject commit 2da3c746e49fcd8a215920961250e9aeba7c32db-dirty
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py
+index fcef5e4..6b4b454 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/unitree.py
+@@ -66,7 +66,7 @@ H12_CFG_HANDLESS = ArticulationCfg(
+        # asset_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_handless.urdf",
+        
+         #laptop path
+-        asset_path= "/home/niraj/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf",
++        asset_path= "/home/niraj/isaac_projects/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf",
+ 
+         activate_contact_sensors=True,
+ 
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+index 8d9ae3d..a045d48 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+@@ -11,10 +11,10 @@ import torch
+ from collections.abc import Sequence
+ from typing import TYPE_CHECKING
+ 
+-from isaacsim.core.simulation_manager import SimulationManager
+ from pxr import UsdPhysics
+ 
+ import isaaclab.sim as sim_utils
++from isaaclab.sim import SimulationContext
+ import isaaclab.utils.string as string_utils
+ from isaaclab.markers import VisualizationMarkers
+ from isaaclab.utils.math import (
+@@ -232,8 +232,10 @@ class TofSensor(SensorBase):
+ 
+         body_names_regex = [tracked_prim_path.replace("env_0", "env_*") for tracked_prim_path in tracked_prim_paths]
+ 
+-        # obtain global simulation view
+-        self._physics_sim_view = SimulationManager.get_physics_sim_view()
++        # obtain global simulation view from context
++        from isaaclab.sim import SimulationContext
++        sim_context = SimulationContext.instance()
++        self._physics_sim_view = sim_context.physics_sim_view
+         # Create a prim view for all frames and initialize it
+         # order of transforms coming out of view will be source frame followed by target frame(s)
+         self._frame_physx_view = self._physics_sim_view.create_rigid_body_view(body_names_regex)
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py
+index 08e9ab7..f3e209c 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/__init__.py
+@@ -12,56 +12,45 @@ from . import agents
+ ##
+ 
+ 
+-
+ gym.register(
+-    id="Template-H12-Bullet-Time-Curriculum-Phase",
+-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+-    disable_env_checker=True,
+-    kwargs={    
+-        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_curriculum_phase:H12BulletTimeEnvCfg_Curriculum_Phase",
+-        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+-    },
+-)   
+-
+-
+-gym.register(
+-    id="Template-H12-Bullet-Time-Curriculum-Phase-Play",
++    id="Template-H12-Bullet-Time-Curriculum",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+     disable_env_checker=True,
+-    kwargs={    
+-        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_curriculum_phase:H12BulletTimeEnvCfg_CurriculumPhasePlay",
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_curriculum:H12BulletTimeSceneCfg_Curriculum",
+         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+     },
+ )
+ 
+ 
+ gym.register(
+-    id="Template-H12-Bullet-Time-Curriculum",
++    id="Template-H12-Bullet-Time-v0",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+     disable_env_checker=True,
+-    kwargs={    
+-        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_curriculum:H12BulletTimeEnvCfg_Curriculum",
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg:H12BulletTimeEnvCfg"        ,
+         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+     },
+-)   
++)
+ 
+ 
+ gym.register(
+-    id="Template-H12-Bullet-Time-v0",
++    id="Template-H12-Bullet-Time-v1",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+     disable_env_checker=True,
+     kwargs={
+-        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg:H12BulletTimeEnvCfg"        ,
++        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_v1:H12BulletTimeEnvCfg_v1",
+         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+     },
+ )
+ 
++
+ gym.register(
+-    id="Template-H12-Bullet-Time-Minimal-v0",
++    id="Template-H12-Bullet-Time-TOF",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+     disable_env_checker=True,
+     kwargs={
+-        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_minimal:MinimalH12EnvCfg",
++        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_tof:H12BulletTimeEnvCfg_TOF",
+         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+     },
+ )
+\ No newline at end of file
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py
+index 1632986..9d14f38 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg.py
+@@ -20,8 +20,8 @@ from isaaclab.utils import configclass
+ 
+ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+ 
+-from isaaclab.envs import mdp
+-from . import mdp as local_mdp
++
++from . import mdp
+ from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
+ # print(H12_CFG_HANDLESS.spawn.usd_path)
+ # exit()
+@@ -45,6 +45,19 @@ class H12BulletTimeSceneCfg(InteractiveSceneCfg):
+         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
+     )
+ 
++    # simple projectile obstacle (one per env) - static config; movement can be
++    # controlled via events or external scripts. Named so the mdp helpers can
++    # find it using the 'projectile' substring.
++
++    projectile = AssetBaseCfg(
++        prim_path="{ENV_REGEX_NS}/Projectile",
++        spawn=sim_utils.SphereCfg(
++            radius=0.08,
++            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
++            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=False),
++            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
++        ),
++    )
+ 
+ ##
+ # MDP settings
+@@ -58,7 +71,7 @@ class ActionsCfg:
+     # We control: hip yaw/pitch/roll, knee, ankle pitch/roll for each leg
+     # and shoulder pitch/roll, elbow for each arm and torso joint
+ 
+-    joint_effort = mdp.JointPositionActionCfg(
++    joint_effort = mdp.JointEffortActionCfg(
+         asset_name="robot",
+         joint_names=[
+             # Left leg
+@@ -113,7 +126,7 @@ class ObservationsCfg:
+         last_action = ObsTerm(func=mdp.last_action)
+         
+         def __post_init__(self) -> None:
+-            # self.history_length = 5
++            self.history_length = 5
+             self.enable_corruption = False
+             self.concatenate_terms = True
+ 
+@@ -122,50 +135,58 @@ class ObservationsCfg:
+     
+     @configclass
+     class CriticCfg(ObsGroup):
+-        """Observations for critic group - includes privileged base velocity info."""
+-        
+-        # Same as policy
+-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+-        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
+-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+-        last_action = ObsTerm(func=mdp.last_action)
++        """Observations for critic group."""
++        pass
++
++    # NEED TO FIX THIS LATER ~ when adding camera depths    
++
++    #     # observation terms (order preserved)
++    #     # currently no noise added? and no scaling ?
++    #     base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
++    #     projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
++    #     joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
++    #     joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
++    #     last_action = ObsTerm(func=mdp.last_action)
+         
+-        # Privileged info: linear velocity (helps critic predict stability)
+-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
+-        
+-        def __post_init__(self) -> None:
+-            self.enable_corruption = False  # No corruption for critic (has privileged info)
+-            self.concatenate_terms = True
+-
+-
+-    critic: CriticCfg = CriticCfg()
++    #     def __post_init__(self) -> None:
++    #         self.history_length = 5
++    #         self.enable_corruption = False
++    #         self.concatenate_terms = True
++    # # privileged observations
++    # critic: CriticCfg = CriticCfg()
+ 
+ 
+ @configclass
+ class RewardsCfg:
+     """Reward terms for the MDP."""
+ 
+-    # Gaussian reward for maintaining base height at target (1.04 m)
+-    # Uses custom Gaussian function: exp(-5*error²) peaks at +1.0 at target height
++    # Minimal reward: maintain base height at 1.04 m
+     base_height = RewTerm(
+-        func=local_mdp.base_height_l2,
+-        weight=10.0,
++        func=mdp.base_height_l2,
++        weight= 1.0,
+         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
+     )
+ 
+     # Alive bonus: reward for staying alive (not falling)
+     alive_bonus = RewTerm(
+-        func=local_mdp.alive_bonus,
+-        weight=5.0,
++        func=mdp.alive_bonus,
++        weight= 2.0,
+         params={},
+     )
+ 
+-    # Additional stabilization rewards
+-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
+-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
+-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
++    # Knee symmetry: encourage left and right knees to maintain similar angles
++    knee_symmetry = RewTerm(
++        func=mdp.knee_symmetry,
++        weight= 0.5,
++        params={"asset_cfg": SceneEntityCfg("robot")},
++    )
++
++    # # Penalty when projectile hits the robot (useful for simple dodge training)
++    # projectile_penalty = RewTerm(
++    #     func=mdp.projectile_hit_penalty,
++    #     weight=1.0,
++    #     params={"asset_cfg": SceneEntityCfg("robot"), "penalty": -10.0, "threshold": 0.25},
++    # )
+ 
+ 
+ @configclass
+@@ -199,6 +220,16 @@ class EventCfg:
+         },
+     )
+ 
++    # Spawn and launch projectiles toward the robot at episode reset. This
++    # places the projectile at spawn_distance in the +X direction and assigns 
++    # it a velocity pointing at the robot base with randomized speed and elevation.
++
++    launch_projectile = EventTerm(
++        func=mdp.launch_projectile,
++        mode="reset",
++        params={},
++    )
++
+ @configclass
+ class TerminationsCfg:
+     """Termination terms for the MDP."""
+@@ -208,10 +239,16 @@ class TerminationsCfg:
+ 
+     # (2) Base height too low (fell down)
+     base_height_low = DoneTerm(
+-        func=local_mdp.base_height_below_threshold,
++        func=mdp.base_height_below_threshold,
+         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
+     )
+ 
++    # # (3) Projectile hit termination (when projectile comes too close)
++    # projectile_hit = DoneTerm(
++    #     func=mdp.projectile_hit,
++    #     params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.25},
++    # )
++
+ ##
+ # Environment configuration
+ ##
+@@ -234,9 +271,29 @@ class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
+         """Post initialization."""
+         # general settings
+         self.decimation = 2
+-        self.episode_length_s = 5  # Reduced from 10 to 5 seconds to prevent falling mid-episode
++        self.episode_length_s = 10  # 10 second episodes
+         # viewer settings
+         self.viewer.eye = (8.0, 0.0, 5.0)
+         # simulation settings
+         self.sim.dt = 1 / 120
+         self.sim.render_interval = self.decimation
++
++
++##
++# Curriculum Configuration
++##
++
++
++# @configclass
++# class CurriculumCfg:
++#     """Curriculum learning configuration."""
++    
++#     # Stage durations (in environment steps)
++#     stage_1_steps = 1_000_000  # Standing and balance
++#     stage_2_steps = 2_000_000  # Height control and agility
++#     stage_3_steps = 3_000_000  # Projectile dodging
++    
++#     # Environment configuration variants for each stage
++#     stage_1_cfg = H12BulletTimeEnvCfg()
++#     stage_2_cfg = H12BulletTimeEnvCfg()
++#     stage_3_cfg = H12BulletTimeEnvCfg()
+\ No newline at end of file
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_curriculum.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_curriculum.py
+index 8be96a1..3f3b7c8 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_curriculum.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_curriculum.py
+@@ -59,7 +59,7 @@ class H12BulletTimeSceneCfg_Curriculum(InteractiveSceneCfg):
+         spawn=sim_utils.SphereCfg(
+             radius=0.075,  
+             visual_material=sim_utils.PreviewSurfaceCfg(
+-                diffuse_color=(0.0, 0.0, 0.2),  # Blue
++                diffuse_color=(0.0, 0.0, 1.0),  # Blue
+                 metallic=0.2,
+             ),
+             rigid_props=sim_utils.RigidBodyPropertiesCfg(
+@@ -70,7 +70,7 @@ class H12BulletTimeSceneCfg_Curriculum(InteractiveSceneCfg):
+             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+         ),
+         init_state=RigidObjectCfg.InitialStateCfg(
+-            pos=(-1.0, -1.0, 0.0),
++            pos=(0.0, 0.0, 1.0),
+             rot=(1.0, 0.0, 0.0, 0.0),
+             lin_vel=(0.0, 0.0, 0.0),
+             ang_vel=(0.0, 0.0, 0.0),
+@@ -135,20 +135,6 @@ class ObservationsCfg:
+         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+         last_action = ObsTerm(func=mdp.last_action)
+         
+-        # Projectile observations (external sensing) - policy needs these to dodge!
+-        projectile_pos_rel = ObsTerm(
+-            func=local_mdp.projectile_position_relative,
+-            scale=0.25,
+-        )
+-        projectile_vel = ObsTerm(
+-            func=local_mdp.projectile_velocity,
+-            scale=0.1,
+-        )
+-        projectile_dist = ObsTerm(
+-            func=local_mdp.projectile_distance_obs,
+-            scale=0.5,
+-        )
+-        
+         def __post_init__(self) -> None:
+             self.enable_corruption = True
+             self.concatenate_terms = True
+@@ -157,7 +143,7 @@ class ObservationsCfg:
+     
+     @configclass
+     class CriticCfg(ObsGroup):
+-        """Observations for critic group - includes privileged base velocity + projectile info (Phase 2)."""
++        """Observations for critic group - includes privileged base velocity info."""
+         
+         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+@@ -168,20 +154,6 @@ class ObservationsCfg:
+         # Privileged info: linear velocity
+         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
+         
+-        # Projectile observations (Phase 2: added for dodging task)
+-        projectile_pos_rel = ObsTerm(
+-            func=local_mdp.projectile_position_relative,
+-            scale=0.25,
+-        )
+-        projectile_vel = ObsTerm(
+-            func=local_mdp.projectile_velocity,
+-            scale=0.1,
+-        )
+-        projectile_dist = ObsTerm(
+-            func=local_mdp.projectile_distance_obs,
+-            scale=0.5,
+-        )
+-        
+         def __post_init__(self) -> None:
+             self.enable_corruption = False
+             self.concatenate_terms = True
+@@ -194,8 +166,8 @@ class RewardsCfg:
+ 
+     # Phase 1 rewards (always active): Stand and balance
+     base_height = RewTerm(
+-        func=local_mdp.base_height_l2,
+-        weight=10.0,
++        func=mdp.base_height_l2,
++        weight= -10.0,
+         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
+     )
+ 
+@@ -207,7 +179,7 @@ class RewardsCfg:
+ 
+     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
+     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.005)
++    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
+     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
+ 
+     # Standing still reward (light)
+@@ -220,14 +192,9 @@ class RewardsCfg:
+     # Phase 2 reward (controlled by curriculum manager, see CurriculumCfg below)
+     # Starts at weight=0.0 (Phase 1), automatically set to 1.0 at step 500K (Phase 2)
+     projectile_penalty = RewTerm(
+-        func=local_mdp.projectile_proximity_penalty,
+-        weight=1.0,  # Active from start (no curriculum gating)
+-        params={
+-            "asset_cfg": SceneEntityCfg("robot"),
+-            "projectile_name": "Projectile",
+-            "max_distance": 3.0,
+-            "penalty_scale": -10.0,  # Strong negative penalty when close
+-        },
++        func=local_mdp.projectile_hit_penalty,
++        weight=0.0,  # Initial: DISABLED in Phase 1, enabled in Phase 2 via curriculum manager
++        params={"asset_cfg": SceneEntityCfg("robot"), "projectile_name": "Projectile", "penalty": -10.0, "threshold": 0.5},
+     )
+ 
+ 
+@@ -240,7 +207,7 @@ class EventCfg:
+         func=mdp.reset_root_state_uniform,
+         mode="reset",
+         params={
+-            "pose_range": {"x": (-0.0, 0.0), "y": (-0.0, 0.0), "yaw": (0.0, 0.0)},
++            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+             "velocity_range": {
+                 "x": (0.0, 0.0),
+                 "y": (0.0, 0.0),
+@@ -262,7 +229,8 @@ class EventCfg:
+         },
+     )
+ 
+-    # Always launch projectiles on reset (no curriculum gating)
++    # Launch projectiles (activated after curriculum milestone at 700K steps)
++    # THIS MUST BE LAST so it runs after robot is reset!
+     launch_projectile = EventTerm(
+         func=local_mdp.launch_projectile,
+         mode="reset",
+@@ -274,8 +242,16 @@ class EventCfg:
+ 
+ @configclass
+ class CurriculumCfg:
+-    """No curriculum gating: projectile penalty active from start."""
+-    pass
++
++    # Curriculum milestone: At 500K steps, activate projectile penalty
++    projectile_penalty_curriculum = CurTerm(
++        func=local_mdp.modify_reward_weight,
++        params={
++            "term_name": "projectile_penalty",
++            "weight": 1.0,
++            "num_steps": 100,  
++        },
++    )
+ 
+ 
+ @configclass
+@@ -292,10 +268,10 @@ class TerminationsCfg:
+     )
+ 
+     # Projectile hit (phase 2 only, activated at milestone)
+-    # NOTE: Disabled hard termination on projectile hit. Use distance-based
+-    # rewards (`projectile_penalty`) instead so agent is punished softly
+-    # when projectiles approach. If you want to re-enable termination, add a
+-    # DoneTerm using `local_mdp.projectile_hit`.
++    projectile_hit = DoneTerm(
++        func=local_mdp.projectile_hit,
++        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.5},
++    )
+ 
+ ##
+ # Environment configuration
+@@ -321,7 +297,7 @@ class H12BulletTimeEnvCfg_Curriculum(ManagerBasedRLEnvCfg):
+         """Post initialization."""
+         # general settings
+         self.decimation = 2
+-        self.episode_length_s = 5  # 5 second episodes (shorter rollouts -> more resets)
++        self.episode_length_s = 10  # 10 second episodes
+         # viewer settings
+         self.viewer.eye = (8.0, 0.0, 5.0)
+         # simulation settings
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_v1.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_v1.py
+index 6ee13c4..8e9498f 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_v1.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_v1.py
+@@ -45,30 +45,18 @@ class H12BulletTimeSceneCfg_v1(InteractiveSceneCfg):
+         spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=500.0),
+     )
+ 
+-    # simple projectile obstacle (one per env) - spawned from random positions
+-    # within 2x2m area around robot at 5m height, then launched toward robot base.
+-    # Movement controlled via launch_projectile event at episode reset.
++    # simple projectile obstacle (one per env) - static config; movement can be
++    # controlled via events or external scripts. Named so the mdp helpers can
++    # find it using the 'projectile' substring.
++
+     Projectile = RigidObjectCfg(
+         prim_path="{ENV_REGEX_NS}/Projectile",
+         spawn=sim_utils.SphereCfg(
+-            radius=0.075,  
+-            visual_material=sim_utils.PreviewSurfaceCfg(
+-                diffuse_color=(0.0, 0.0, 1.0),  # Blue
+-                metallic=0.2,
+-            ),
+-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+-                solver_position_iteration_count=4,
+-                solver_velocity_iteration_count=0,
+-            ),
++            radius=0.08,
+             mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
++            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=False),
+             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+         ),
+-        init_state=RigidObjectCfg.InitialStateCfg(
+-            pos=(0.0, 0.0, 1.0),  # Initial spawn height
+-            rot=(1.0, 0.0, 0.0, 0.0),
+-            lin_vel=(0.0, 0.0, 0.0),
+-            ang_vel=(0.0, 0.0, 0.0),
+-        ),
+     )
+ 
+ ##
+@@ -79,7 +67,11 @@ class H12BulletTimeSceneCfg_v1(InteractiveSceneCfg):
+ class ActionsCfg:
+     """Action specifications for the MDP."""
+ 
+-    joint_effort = mdp.JointPositionActionCfg(
++    # H12 has 19 DOF: 6 per leg + 3 per arm (shoulder pitch/roll, elbow) + torso too ! ~ ignored wrist and shoulder yaw
++    # We control: hip yaw/pitch/roll, knee, ankle pitch/roll for each leg
++    # and shoulder pitch/roll, elbow for each arm and torso joint
++
++    joint_effort = mdp.JointEffortActionCfg(
+         asset_name="robot",
+         joint_names=[
+             # Left leg
+@@ -125,6 +117,8 @@ class ObservationsCfg:
+     class PolicyCfg(ObsGroup):
+         """Observations for policy group."""
+ 
++        # observation terms (order preserved)
++        # currently no noise added? and no scaling ?
+         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
+@@ -132,7 +126,7 @@ class ObservationsCfg:
+         last_action = ObsTerm(func=mdp.last_action)
+         
+         def __post_init__(self) -> None:
+-           # self.history_length = 5
++            self.history_length = 5
+             self.enable_corruption = False
+             self.concatenate_terms = True
+ 
+@@ -141,37 +135,25 @@ class ObservationsCfg:
+     
+     @configclass
+     class CriticCfg(ObsGroup):
+-        """Observations for critic group - includes privileged info about projectile."""
+-        
+-        # Basic state
+-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+-        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
+-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
+-        last_action = ObsTerm(func=mdp.last_action)
+-        
+-        # Projectile observations (privileged info for critic)
+-        # These help the value function estimate future rewards based on incoming threat
+-        projectile_pos_rel = ObsTerm(
+-            func=mdp.projectile_position_relative,
+-            scale=0.25,  # Scale to similar magnitude as other observations
+-        )
+-        projectile_vel = ObsTerm(
+-            func=mdp.projectile_velocity,
+-            scale=0.1,  # Smaller scale for velocity
+-        )
+-        projectile_dist = ObsTerm(
+-            func=mdp.projectile_distance,
+-            scale=0.5,  # Distance scaling
+-        )
++        """Observations for critic group."""
++        pass
++
++    # NEED TO FIX THIS LATER ~ when adding camera depths    
++
++    #     # observation terms (order preserved)
++    #     # currently no noise added? and no scaling ?
++    #     base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
++    #     projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
++    #     joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
++    #     joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
++    #     last_action = ObsTerm(func=mdp.last_action)
+         
+-        def __post_init__(self) -> None:
+-         #   self.history_length = 5  
+-            self.enable_corruption = False
+-            self.concatenate_terms = True
+-
+-    # Enable critic observations
+-    critic: CriticCfg = CriticCfg()
++    #     def __post_init__(self) -> None:
++    #         self.history_length = 5
++    #         self.enable_corruption = False
++    #         self.concatenate_terms = True
++    # # privileged observations
++    # critic: CriticCfg = CriticCfg()
+ 
+ 
+ @configclass
+@@ -179,33 +161,33 @@ class RewardsCfg:
+     """Reward terms for the MDP."""
+ 
+     # Minimal reward: maintain base height at 1.04 m
+-    # base_height = RewTerm(
+-    #     func=mdp.base_height_l2,
+-    #     weight= 0.1,
+-    #     params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
+-    # )
++    base_height = RewTerm(
++        func=mdp.base_height_l2,
++        weight= 1.0,
++        params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
++    )
+ 
+     # Alive bonus: reward for staying alive (not falling)
+     alive_bonus = RewTerm(
+         func=mdp.alive_bonus,
+-        weight= 5.0,
++        weight= 2.0,
+         params={},
+     )
+ 
+-    # # Knee symmetry: encourage left and right knees to maintain similar angles
+-    # knee_symmetry = RewTerm(
+-    #     func=mdp.knee_symmetry,
+-    #     weight= 0.1,
+-    #     params={"asset_cfg": SceneEntityCfg("robot")},
+-    # )
+-
+-    # Penalty when projectile hits the robot (useful for simple dodge training)
+-    projectile_penalty = RewTerm(
+-        func=mdp.projectile_hit_penalty,
+-        weight=1.0,
+-        params={"asset_cfg": SceneEntityCfg("robot"), "penalty": -10.0, "threshold": 0.5},
++    # Knee symmetry: encourage left and right knees to maintain similar angles
++    knee_symmetry = RewTerm(
++        func=mdp.knee_symmetry,
++        weight= 0.5,
++        params={"asset_cfg": SceneEntityCfg("robot")},
+     )
+ 
++    # # Penalty when projectile hits the robot (useful for simple dodge training)
++    # projectile_penalty = RewTerm(
++    #     func=mdp.projectile_hit_penalty,
++    #     weight=1.0,
++    #     params={"asset_cfg": SceneEntityCfg("robot"), "penalty": -10.0, "threshold": 0.25},
++    # )
++
+ 
+ @configclass
+ class EventCfg:
+@@ -216,7 +198,7 @@ class EventCfg:
+         func=mdp.reset_root_state_uniform,
+         mode="reset",
+         params={
+-            "pose_range": {"x": (-0.0, 0.0), "y": (-0.0, 0.0), "yaw": (0, 0)},
++            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+             "velocity_range": {
+                 "x": (0.0, 0.0),
+                 "y": (0.0, 0.0),
+@@ -238,17 +220,15 @@ class EventCfg:
+         },
+     )
+ 
+-    # Spawn and launch projectiles toward the robot at episode reset. This
+-    # places the projectile from random position within 2x2m area at 5m height
+-    # and assigns it a velocity pointing at the robot base.
+-    # THIS MUST BE LAST so it runs after robot is reset!
++    # # Spawn and launch projectiles toward the robot at episode reset. This
++    # # places the projectile at a randomized azimuth around the robot at
++    # # `spawn_distance` and assigns it a velocity pointing at the robot base.
++
+     launch_projectile = EventTerm(
+-        func=mdp.launch_projectile,
+-        mode="reset",
+-        params={
+-            "asset_cfg": SceneEntityCfg("Projectile"),
+-        },
+-    )
++            func=mdp.launch_projectile,
++            mode="reset",
++            params={},
++        )
+ 
+ @configclass
+ class TerminationsCfg:
+@@ -263,16 +243,17 @@ class TerminationsCfg:
+         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
+     )
+ 
+-    # (3) Projectile hit termination (when projectile comes within threshold of ANY robot body part)
+-    projectile_hit = DoneTerm(
+-        func=mdp.projectile_hit,
+-        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.5},  # 0.5 meter distance threshold
+-    )
++    # # (3) Projectile hit termination (when projectile comes too close)
++    # projectile_hit = DoneTerm(
++    #     func=mdp.projectile_hit,
++    #     params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.25},
++    # )
+ 
+ ##
+ # Environment configuration
+ ##
+ 
++
+ @configclass
+ class H12BulletTimeEnvCfg_v1(ManagerBasedRLEnvCfg):
+     # Scene settings
+@@ -295,4 +276,24 @@ class H12BulletTimeEnvCfg_v1(ManagerBasedRLEnvCfg):
+         self.viewer.eye = (8.0, 0.0, 5.0)
+         # simulation settings
+         self.sim.dt = 1 / 120
+-        self.sim.render_interval = self.decimation
+\ No newline at end of file
++        self.sim.render_interval = self.decimation
++
++
++##
++# Curriculum Configuration
++##
++
++
++# @configclass
++# class CurriculumCfg:
++#     """Curriculum learning configuration."""
++    
++#     # Stage durations (in environment steps)
++#     stage_1_steps = 1_000_000  # Standing and balance
++#     stage_2_steps = 2_000_000  # Height control and agility
++#     stage_3_steps = 3_000_000  # Projectile dodging
++    
++#     # Environment configuration variants for each stage
++#     stage_1_cfg = H12BulletTimeEnvCfg()
++#     stage_2_cfg = H12BulletTimeEnvCfg()
++#     stage_3_cfg = H12BulletTimeEnvCfg()
+\ No newline at end of file
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py
+index 6a1fe02..308a0f1 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/__init__.py
+@@ -9,7 +9,6 @@ from isaaclab.envs.mdp import *  # noqa: F401, F403
+ 
+ from .rewards import *  # noqa: F401, F403
+ from .terminations import *  # noqa: F401, F403
+-from .curriculums import *  # noqa: F401, F403
+ 
+ # export local event helpers
+ from .events import *  # noqa: F401, F403
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+index 8d15d8f..d28ac05 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+@@ -8,141 +8,113 @@ import torch
+ 
+ if TYPE_CHECKING:
+     from isaaclab.envs import ManagerBasedRLEnv
+-
+ from isaaclab.managers import SceneEntityCfg
+ 
+ 
+ def launch_projectile(
+-    env: ManagerBasedRLEnv,
+-    env_ids: torch.Tensor,
+-    asset_cfg: SceneEntityCfg = SceneEntityCfg("Projectile"),
+-)-> None:
+-
+-    # Parameters (defaults chosen to spawn relative to torso link)
+-    spawn_distance = 1.5
+-    height_offset = 0.85
+-    throw_speed = 5.0
+-    offset_range_x = 1.0
+-    offset_range_z = 0.1
+-    # Randomization: allow +/-20% variation on spawn_distance and height_offset per env
+-    var_frac = 0.2  # 20%
+-
+-    # Get projectile and robot from scene
+-    proj = env.scene[asset_cfg.name]
+-    robot = env.scene["robot"]
++    env: ManagerBasedRLEnv, 
++    env_ids: torch.Tensor, 
++    asset_cfg: SceneEntityCfg | None = None
++) -> None:
++    """Event handler to spawn and launch spherical projectiles toward the robot.
+ 
+-    # Try to get body link positions; fall back to root if not available
++    This is intended to be called at episode reset (EventTerm with mode="reset").
++    The function spawns projectiles 3 meters above the robot at random azimuth
++    angles and 5m horizontal distance, then gives them velocity to fall toward the robot.
++    
++    Args:
++        env: The ManagerBasedRLEnv environment instance.
++        env_ids: Indices of environments to reset projectiles for.
++        asset_cfg: Optional scene entity config for projectile (defaults to "Projectile").
++    """
++    # Internal configuration
++    projectile_name = "Projectile"
++    spawn_distance_xy = 5.0  # horizontal distance from robot
++    spawn_height = 3.0       # height above robot base
++    min_speed = 4.0
++    max_speed = 8.0
++
++    # Try to get projectile and robot from scene
+     try:
+-        body_names = list(robot.body_names)
+-    except Exception:
+-        body_names = []
+-
+-    root_pos = robot.data.root_pos_w  # (num_envs, 3)
+-    device = root_pos.device
+-
+-    # Default center positions for the envs being reset
+-    center = root_pos[env_ids]
+-    # If torso (or requested link) exists, use that link's world position
+-    if "torso" in body_names:
+-        idx = body_names.index("torso")
+-        link_pos = robot.data.body_pos_w[:, idx, :]
+-        center = link_pos[env_ids]
+-
+-    n = env_ids.numel()
+-
+-    # Random offsets
+-    # x_offset only to the right: sample in [0, offset_range_x]
+-    x_offset = torch.rand((n,), device=device, dtype=torch.float32) * offset_range_x
+-    z_offset = torch.rand((n,), device=device, dtype=torch.float32) * 2 * offset_range_z - offset_range_z
+-
+-    # Per-env random scaling in [1-0.2, 1+0.2]
+-    sd_scale = 1.0 + (torch.rand((n,), device=device, dtype=torch.float32) * 2.0 * var_frac - var_frac)
+-    ho_scale = 1.0 + (torch.rand((n,), device=device, dtype=torch.float32) * 2.0 * var_frac - var_frac)
+-    spawn_distance_per_env = spawn_distance * sd_scale
+-    height_offset_per_env = height_offset * ho_scale
+-
+-    # Spawn position: in front of link and height offset above link
+-    spawn_pos = torch.zeros((n, 3), device=device, dtype=torch.float32)
+-    # apply per-env spawn distance and height offset with random +/-20% variation
+-    spawn_pos[:, 0] = center[:, 0] + spawn_distance_per_env + x_offset
+-    spawn_pos[:, 1] = center[:, 1]
+-    spawn_pos[:, 2] = center[:, 2] + height_offset_per_env + z_offset
++        proj = env.scene[projectile_name]
++        robot = env.scene["robot"]
++        robot_base_pos = robot.data.body_pos_w[:, 0, :]  # Body 0 is the base
++    except (KeyError, AttributeError, IndexError):
++        # Assets not available, exit gracefully
++        return
+ 
+-    # Identity quaternion
++    device = robot_base_pos.device
++    
++    # Convert env_ids to long tensor
++    env_ids_long = env_ids.long() if isinstance(env_ids, torch.Tensor) else torch.tensor(env_ids, device=device, dtype=torch.long)
++    n = env_ids_long.numel()
++    if n == 0:
++        return
++    
++    # Get robot base positions for the envs being reset
++    base_pos = robot_base_pos[env_ids_long]  # shape (n, 3)
++    
++    # Random azimuth angles (around the robot)
++    az = torch.rand(n, device=device) * 2 * math.pi
++    
++    # Spawn position: offset in XY by spawn_distance_xy, add spawn_height to Z
++    dx_spawn = torch.cos(az) * spawn_distance_xy
++    dy_spawn = torch.sin(az) * spawn_distance_xy
++    
++    spawn_pos = base_pos.clone()
++    spawn_pos[:, 0] += dx_spawn
++    spawn_pos[:, 1] += dy_spawn
++    spawn_pos[:, 2] += spawn_height
++    
++    # Create identity quaternions (no rotation) [w, x, y, z]
+     quats = torch.zeros((n, 4), device=device, dtype=torch.float32)
+     quats[:, 0] = 1.0
+-
+-    # Linear velocity toward robot (-X)
+-    lin_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
+-    lin_vel[:, 0] = -throw_speed
+-
++    
++    # Velocity: toward robot + downward
++    to_base_xy = base_pos[:, :2] - spawn_pos[:, :2]
++    to_base_z = torch.full_like(to_base_xy[:, :1], -spawn_height)
++    
++    to_base = torch.cat([to_base_xy, to_base_z], dim=-1)
++    to_base_dist = torch.norm(to_base, dim=-1, keepdim=True).clamp(min=1e-6)
++    direction_to_base = to_base / to_base_dist
++    
++    # Random speed for each projectile
++    speeds = (min_speed + (max_speed - min_speed) * torch.rand(n, device=device)).unsqueeze(-1)
++    vel = direction_to_base * speeds
++    
++    # Zero angular velocity
+     ang_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
+-
+-    pose = torch.cat([spawn_pos, quats], dim=-1)
+-    velocity = torch.cat([lin_vel, ang_vel], dim=-1)
+-
+-    proj.write_root_pose_to_sim(pose, env_ids)
+-    proj.write_root_velocity_to_sim(velocity, env_ids)
+-    # Debug print: show spawn info for the envs we updated
+-    # try:
+-    #     sp = spawn_pos.cpu().numpy()
+-    #     lv = lin_vel.cpu().numpy()
+-    #     ids = env_ids.cpu().numpy()
+-    #     print(f"[launch_projectile] env_ids={ids.tolist()}, spawn_pos={sp.tolist()}, lin_vel={lv.tolist()}")
+-    # except Exception:
+-    #     # Fallback safe print if tensors are not CPU-accessible
+-    #     print(f"[launch_projectile] spawned projectiles for env_ids={env_ids}")
+-
+-
+-def launch_projectile_curriculum(
+-    env: ManagerBasedRLEnv,
+-    env_ids: torch.Tensor,
+-    asset_cfg: SceneEntityCfg = SceneEntityCfg("Projectile"),
+-    curriculum_step: int = 2000,
+-) -> None:
+-
+-    # Only launch projectiles after curriculum milestone
+-    # Note: common_step_counter counts training iterations, not environment steps
+-    if env.common_step_counter < curriculum_step:
+-        return
+     
+-    # Call the regular launch_projectile function
+-    launch_projectile(env, env_ids, asset_cfg)
+-
+-
+-# def apply_torso_pitch_disturbance(
+-#     env: ManagerBasedRLEnv,
+-# ) -> None:
+-
+-#     # Get the torso pitch curriculum scale (returns 0 before curriculum_step, ramps up after)
+-#     from . import rewards as mdp_rewards
+-    
+-#     scale = mdp_rewards.torso_pitch_curriculum(
+-#         env,
+-#         curriculum_step=500,
+-#         max_pitch_scale=0.5,
+-#     )  # shape: (num_envs,)
+-    
+-#     if scale.max() > 0:  # Only apply if there's non-zero scale
+-#         # Torso joint is at index 12 in the joint_names list in ActionsCfg
+-#         # Joint order: left_leg (6) + right_leg (6) + torso (1) = index 12
+-#         torso_pitch_idx = 12
+-        
+-#         num_envs = env.num_envs
+-        
+-#         # Generate random pitch perturbations (Gaussian noise)
+-#         perturbation = torch.randn(
+-#             (num_envs,),
+-#             device=env.device,
+-#             dtype=torch.float32,
+-#         ) * scale  # Scale by curriculum value
+-        
+-#         # Apply to action directly
+-#         # env.action_manager.action is the processed action tensor
+-#         # We add perturbation to the torso pitch joint command
+-#         try:
+-#             env.action_manager.action[:, torso_pitch_idx] += perturbation
+-#         except (IndexError, RuntimeError):
+-#             # If action tensor shape is different, silently skip
+-#             pass
+-
++    # Update FULL batch buffers (not just reset indices!)
++    # This is critical: write_data_to_sim() needs the full batch
++    full_pos = proj.data.body_pos_w[:, 0, :].clone()
++    full_quat = proj.data.body_quat_w[:, 0, :].clone()
++    full_lin_vel = proj.data.body_lin_vel_w[:, 0, :].clone()
++    full_ang_vel = proj.data.body_ang_vel_w[:, 0, :].clone()
++    
++    # Update only reset environments
++    full_pos[env_ids_long] = spawn_pos
++    full_quat[env_ids_long] = quats
++    full_lin_vel[env_ids_long] = vel
++    full_ang_vel[env_ids_long] = ang_vel
++    
++    # Write full batch back
++    proj.data.body_pos_w[:, 0, :] = full_pos
++    proj.data.body_quat_w[:, 0, :] = full_quat
++    proj.data.body_lin_vel_w[:, 0, :] = full_lin_vel
++    proj.data.body_ang_vel_w[:, 0, :] = full_ang_vel
++    
++    # Critically important: write to physics engine
++    proj.write_data_to_sim()
++    
++    # Also update default state to ensure it persists through resets
++    try:
++        proj.data.default_root_state[env_ids_long, 0:3] = spawn_pos
++        proj.data.default_root_state[env_ids_long, 3:7] = quats
++        proj.data.default_root_state[env_ids_long, 7:10] = vel
++        proj.data.default_root_state[env_ids_long, 10:13] = ang_vel
++    except Exception:
++        pass
++    
++    print(f"[PROJ] Spawn {n} projectiles at {spawn_pos[0].cpu()}", file=sys.stderr)
++    sys.stderr.flush()
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+index 5867b0f..4416e0d 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+@@ -15,7 +15,6 @@ from isaaclab.envs.mdp import (
+ 
+ if TYPE_CHECKING:
+     from isaaclab.envs import ManagerBasedRLEnv
+-    from isaaclab.managers import SceneEntityCfg
+ 
+ __all__ = [
+     "base_ang_vel",
+@@ -23,88 +22,128 @@ __all__ = [
+     "joint_vel_rel",
+     "projected_gravity",
+     "last_action",
++    "tof_distances_obs",
+     "projectile_position_relative",
+     "projectile_velocity",
+     "projectile_distance_obs",
+ ]
+ 
+ 
+-def projectile_position_relative(
++def tof_distances_obs(
+     env: ManagerBasedRLEnv,
+-    projectile_name: str = "Projectile",
+-    robot_link_name: str = "head",
++    max_range: float = 4.0,
++    handle_nan: str = "replace_with_max",
+ ) -> torch.Tensor:
+-
+-    robot = env.scene["robot"]
+-
+-    # Determine robot link/world position to use
+-    robot_pos = None
+-    try:
+-        body_names = list(robot.body_names)
+-    except Exception:
+-        body_names = []
+-
+-    if robot_link_name is not None and robot_link_name in body_names:
+-        idx = body_names.index(robot_link_name)
+-        # body_pos_w shape: (num_envs, num_bodies, 3)
+-        robot_pos = robot.data.body_pos_w[:, idx, :]
++    """Extract TOF distance readings from all sensors in the scene.
++    
++    Args:
++        env: The RL environment.
++        max_range: Maximum detection range for normalization. Default: 4.0 meters.
++        handle_nan: How to handle NaN values (sensor missed target):
++            - "replace_with_max": Replace NaN with max_range
++            - "zero": Replace NaN with 0
++            - "keep": Keep NaN (will cause issues in training)
++    
++    Returns:
++        Flattened tensor of TOF distances from all sensors. Shape: (num_envs, num_sensors_total)
++        Values are normalized by max_range.
++    """
++    # Collect all TOF sensor data from the scene
++    tof_distances_list = []
++    
++    # Iterate through all entities in the scene
++    for sensor_name, sensor in env.scene.sensors.items():
++        if hasattr(sensor, 'data') and hasattr(sensor.data, 'tof_distances'):
++            # Get the TOF distances: shape (num_envs, num_sensors, num_targets)
++            tof_data = sensor.data.tof_distances  # (N, S, M)
++            
++            # Flatten sensor dimensions: (N, S*M)
++            N = tof_data.shape[0]
++            tof_data_flat = tof_data.reshape(N, -1)
++            
++            # Handle NaN values
++            if handle_nan == "replace_with_max":
++                tof_data_flat = torch.where(
++                    torch.isnan(tof_data_flat),
++                    torch.full_like(tof_data_flat, max_range),
++                    tof_data_flat
++                )
++            elif handle_nan == "zero":
++                tof_data_flat = torch.where(
++                    torch.isnan(tof_data_flat),
++                    torch.zeros_like(tof_data_flat),
++                    tof_data_flat
++                )
++            # else: keep NaN (risky)
++            
++            # Normalize by max_range
++            tof_data_normalized = tof_data_flat / max_range
++            
++            tof_distances_list.append(tof_data_normalized)
++    
++    # Concatenate all sensor data
++    if tof_distances_list:
++        tof_obs = torch.cat(tof_distances_list, dim=1)
+     else:
+-        # Fallback to root_pos_w (num_envs, 3)
+-        robot_pos = robot.data.root_pos_w
+-
+-    try:
+-        projectile = env.scene[projectile_name]
+-        proj_pos = projectile.data.root_pos_w  # (num_envs, 3)
+-    except (KeyError, AttributeError):
+-        # If projectile not found, return zeros
+-        return torch.zeros((env.num_envs, 3), device=env.device, dtype=torch.float32)
+-
+-    # Relative position: projectile - robot_link
+-    return proj_pos - robot_pos
+-
+-
+-def projectile_velocity(
+-    env: ManagerBasedRLEnv,
+-    projectile_name: str = "Projectile",
+-) -> torch.Tensor:
+-    """Get projectile velocity in world frame.
+-
+-    Returns a (num_envs, 3) tensor. If the projectile is not present returns zeros.
++        # No TOF sensors found - return empty tensor
++        tof_obs = torch.zeros(env.num_envs, 0, device=env.device)
++    
++    return tof_obs
++
++
++def projectile_position_relative(env: ManagerBasedRLEnv) -> torch.Tensor:
++    """Projectile position relative to robot base.
++    
++    Args:
++        env: The RL environment.
++    
++    Returns:
++        Relative position vector (x, y, z). Shape: (num_envs, 3)
+     """
+-    try:
+-        projectile = env.scene[projectile_name]
+-        return projectile.data.root_lin_vel_w  # (num_envs, 3)
+-    except (KeyError, AttributeError):
+-        # If projectile not found, return zeros
+-        return torch.zeros((env.num_envs, 3), device=env.device, dtype=torch.float32)
+-
+-
+-def projectile_distance_obs(
+-    env: ManagerBasedRLEnv,
+-    projectile_name: str = "Projectile",
+-    robot_link_name: str = "head",
+-) -> torch.Tensor:
+-
+     robot = env.scene["robot"]
+-
+-    # Choose robot link position
+-    try:
+-        body_names = list(robot.body_names)
+-    except Exception:
+-        body_names = []
+-
+-    if robot_link_name is not None and robot_link_name in body_names:
+-        idx = body_names.index(robot_link_name)
+-        robot_pos = robot.data.body_pos_w[:, idx, :]
+-    else:
+-        robot_pos = robot.data.root_pos_w
+-
+-    try:
+-        projectile = env.scene[projectile_name]
+-        proj_pos = projectile.data.root_pos_w  # (num_envs, 3)
+-    except (KeyError, AttributeError):
+-        # If projectile not found, return zeros (no threat)
+-        return torch.zeros((env.num_envs, 1), device=env.device, dtype=torch.float32)
+-
+-    distance = torch.norm(proj_pos - robot_pos, dim=-1, keepdim=True)
++    projectile = env.scene["Projectile"]
++    
++    # Get positions
++    robot_pos = robot.data.root_pos_w  # (num_envs, 3)
++    projectile_pos = projectile.data.root_pos_w  # (num_envs, 3)
++    
++    # Relative position: projectile w.r.t. robot
++    projectile_pos_rel = projectile_pos - robot_pos
++    
++    return projectile_pos_rel
++
++
++def projectile_velocity(env: ManagerBasedRLEnv) -> torch.Tensor:
++    """Projectile velocity in world frame.
++    
++    Args:
++        env: The RL environment.
++    
++    Returns:
++        Projectile linear velocity. Shape: (num_envs, 3)
++    """
++    projectile = env.scene["Projectile"]
++    return projectile.data.root_lin_vel_w  # (num_envs, 3)
++
++
++def projectile_distance_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
++    """Distance between robot and projectile.
++    
++    Args:
++        env: The RL environment.
++    
++    Returns:
++        Euclidean distance (scalar per env). Shape: (num_envs, 1)
++    """
++    robot = env.scene["robot"]
++    projectile = env.scene["Projectile"]
++    
++    # Get positions
++    robot_pos = robot.data.root_pos_w  # (num_envs, 3)
++    projectile_pos = projectile.data.root_pos_w  # (num_envs, 3)
++    
++    # Distance
++    distance = torch.linalg.norm(projectile_pos - robot_pos, dim=1, keepdim=True)
++    
+     return distance
++
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py
+index 1adfd94..1937c43 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/rewards.py
+@@ -1,3 +1,8 @@
++"""Minimal reward functions for Phase 1 (standing).
++
++These functions provide simple scalar rewards so the environment can start and
++the curriculum logic can operate. Replace with more sophisticated terms later.
++"""
+ from __future__ import annotations
+ 
+ import torch
+@@ -7,396 +12,161 @@ from isaaclab.managers import SceneEntityCfg
+ 
+ from isaaclab.envs import ManagerBasedRLEnv
+ 
+-__all__ = [
+-    "alive_bonus",
+-    "base_height_l2",
+-    "base_velocity_reward",
+-    "projectile_hit_penalty",
+-    "projectile_proximity_penalty",
+-    "projectile_distance",
+-    "projectile_contact_penalty",
+-    "torso_pitch_curriculum",
+-    "torso_pitch_reward",
+-]
++def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
++    """Reward for maintaining base height close to target (default 1.0 m).
++    
++    Returns negative L2 distance from target height so higher is better.
++    """
++    # extract robot asset
++    asset: Articulation = env.scene[asset_cfg.name]
++    # get base height (z-position of root body)
++    base_height = asset.data.body_pos_w[:, 0, 2]
++    # compute L2 distance from target
++    height_error = base_height - target_height
++    # return negative squared error (so reward decreases as height deviates)
++    return -torch.square(height_error)
+ 
+ 
+ def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
+-
++    """Bonus reward for staying alive (not falling).
++    
++    Returns +1.0 for each timestep the robot is still running.
++    """
+     # Return constant reward per environment (batch)
+     return torch.ones(env.num_envs, dtype=torch.float32, device=env.device)
+ 
+ 
+-
+-def base_height_l2(
+-    env: ManagerBasedRLEnv,
+-    asset_cfg: SceneEntityCfg,
+-    target_height: float = 1.04,
+-) -> torch.Tensor:
+-    """Gaussian reward for maintaining base height at target.
++def knee_symmetry(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
++    """Reward for keeping left and right knees at similar distance from each other.
+     
+-    Returns high reward when robot is at target height, decays with Gaussian.
++    Encourages symmetric leg posture by maintaining consistent distance between left and right knee bodies.
++    This helps prevent one leg from bending more than the other.
++    Returns negative L2 distance from target separation so higher is better.
+     """
++    # extract robot asset
+     asset: Articulation = env.scene[asset_cfg.name]
+     
+-    # Get base height
+-    height = asset.data.root_pos_w[:, 2]  # z-coordinate
++    # Get body indices for left and right knees by name
++    body_names = asset.body_names
++    left_knee_idx = body_names.index("left_knee_link")
++    right_knee_idx = body_names.index("right_knee_link")
+     
+-    # Gaussian penalty: exp(-5 * (height - target)^2)
+-    error = height - float(target_height)
+-    reward = torch.exp(-5.0 * error**2)
++    # Get left and right knee body positions in world frame
++    left_knee_pos = asset.data.body_pos_w[:, left_knee_idx, :]  # shape: (num_envs, 3)
++    right_knee_pos = asset.data.body_pos_w[:, right_knee_idx, :]  # shape: (num_envs, 3)
+     
+-    return reward
+-
+-
+-def base_velocity_reward(
+-    env: ManagerBasedRLEnv,
+-    asset_cfg: SceneEntityCfg,
+-    scale: float = 10.0,
+-) -> torch.Tensor:
+-
+-    asset: Articulation = env.scene[asset_cfg.name]
+-
+-    lin_vel = asset.data.root_lin_vel_w[:, :2]  # shape: (num_envs, 2)
+-    vel_norm2 = torch.sum(lin_vel ** 2, dim=1)
+-    reward = torch.exp(-float(scale) * vel_norm2)
+-
+-    return reward
+- 
+-def projectile_hit_penalty(
+-    env: ManagerBasedRLEnv,
+-    asset_cfg: SceneEntityCfg,
+-    projectile_name: str = "Projectile",
+-    penalty: float = -10.0,
+-    threshold: float = 0.5,
+-) -> torch.Tensor:
+-
+-    # Get robot
+-    robot: Articulation = env.scene[asset_cfg.name]
+-    robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)
++    # Compute 3D distance between knees
++    knee_distance = torch.norm(left_knee_pos - right_knee_pos, dim=1)  # shape: (num_envs,)
+     
+-    # Get projectile
+-    try:
+-        projectile = env.scene[projectile_name]
+-        proj_pos = projectile.data.root_pos_w  # shape: (num_envs, 3)
+-    except (KeyError, AttributeError):
+-        # Projectile not found, no penalty
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-    
+-    # Compute distance from projectile to each robot body
+-    # proj_pos: (num_envs, 3) -> (num_envs, 1, 3)
+-    # robot_body_positions: (num_envs, num_bodies, 3)
+-    distances = torch.norm(
+-        robot_body_positions - proj_pos.unsqueeze(1),
+-        dim=-1
+-    )
++    # Target distance is roughly shoulder width (around 0.3-0.4 m for humanoid)
++    # We want to penalize deviation from this natural stance width
++    target_knee_distance = 0.4  # meters
+     
+-    # Find minimum distance to any body for each environment
+-    min_dist_per_env = distances.min(dim=1)[0]  # shape: (num_envs,)
++    # Compute error: distance from target
++    distance_error = knee_distance - target_knee_distance
+     
+-    # Apply penalty if within threshold
+-    reward = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-    hit = min_dist_per_env < float(threshold)
+-    reward[hit] = float(penalty)
+-    
+-    return reward
+-
+-
+-# def projectile_contact_penalty(
+-#     env: ManagerBasedRLEnv,
+-#     asset_cfg: SceneEntityCfg,
+-#     projectile_name: str = "Projectile",
+-#     contact_threshold: float = 0.05,
+-#     penalty: float = -500.0,
+-# ) -> torch.Tensor:
+-
+-#     # Get robot body positions
+-#     robot: Articulation = env.scene[asset_cfg.name]
+-#     try:
+-#         robot_body_positions = robot.data.body_pos_w  # (num_envs, num_bodies, 3)
+-#     except Exception:
+-#         # If body positions are not available, return zeros
+-#         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-
+-#     # Get projectile
+-#     scene_names = list(env.scene.keys())
+-#     candidates = [] if projectile_name is None else [projectile_name]
+-#     if projectile_name is None:
+-#         for n in scene_names:
+-#             if "projectile" in n.lower() or "obstacle" in n.lower():
+-#                 candidates.append(n)
+-
+-#     if len(candidates) == 0:
+-#         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
++    # Return negative squared error (so reward increases when knees maintain target distance)
++    return -torch.square(distance_error)
+ 
+-#     penalty_tensor = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+ 
+-#     for name in candidates:
+-#         obj = env.scene[name]
+-#         try:
+-#             proj_pos = obj.data.root_pos_w  # (num_envs, 3)
+-#         except Exception:
+-#             try:
+-#                 proj_pos = obj.data.body_pos_w[:, 0, :]
+-#             except Exception:
+-#                 continue
+-
+-#         # Compute distances to all robot bodies
+-#         distances = torch.norm(robot_body_positions - proj_pos.unsqueeze(1), dim=-1)  # (num_envs, num_bodies)
+-#         min_dist = distances.min(dim=1)[0]
+-
+-#         hit_mask = min_dist < float(contact_threshold)
+-#         if hit_mask.any():
+-#             penalty_tensor[hit_mask] = float(penalty)
+-
+-#     return penalty_tensor
+-
+-
+-def projectile_proximity_penalty(
++def projectile_hit_penalty(
+     env: ManagerBasedRLEnv,
+     asset_cfg: SceneEntityCfg,
+-    projectile_name: str = "Projectile",
+-    max_distance: float = 2.0,
+-    penalty_scale: float = -1.0,
+-    approach_gain: float = 2.0,
++    projectile_names: list | None = None,
++    penalty: float = -10.0,
++    threshold: float = 0.3,
+ ) -> torch.Tensor:
+-    # Get robot
+-    robot: Articulation = env.scene[asset_cfg.name]
+-
+-    # Get projectile
+-    try:
+-        projectile = env.scene[projectile_name]
+-        proj_pos = projectile.data.root_pos_w  # shape: (num_envs, 3)
+-    except (KeyError, AttributeError):
+-        # Projectile not found, no penalty
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-
+-    # Build a list of robot link positions to consider for proximity checks.
+-    # Include base/root plus important upper-body links so the robot fully avoids obstacles.
+-    positions_list = []
+-    # root/base position (index 0)
+-    try:
+-        root_pos = robot.data.root_pos_w[:, :3]
+-        positions_list.append(root_pos.unsqueeze(1))  # (num_envs, 1, 3)
+-    except Exception:
+-        # Fallback to zeros if unavailable
+-        positions_list.append(torch.zeros((env.num_envs, 1, 3), device=env.device, dtype=torch.float32))
+-
+-    # Preferred link names to check (as requested by user)
+-    link_names_to_check = [
+-        "left_elbow_link",
+-        "right_elbow_link",
+-        "left_shoulder_yaw_link",
+-        "right_shoulder_yaw_link",
+-        # Lidar mounted on torso (protect sensor)
+-        "lidar_link",
+-    ]
+-
+-    # Robot may expose body/link names via "body_names" attribute
+-    body_names = []
+-    try:
+-        body_names = list(robot.body_names)
+-    except Exception:
+-        body_names = []
+-
+-    # Track which appended index corresponds to which link name so we can
+-    # apply link-specific amplifications (e.g., for `lidar_link`).
+-    link_indices: dict = {}
+-
+-    # For each requested link, if present, append its world position
+-    for ln in link_names_to_check:
+-        if ln in body_names:
+-            idx = body_names.index(ln)
+-            link_pos = robot.data.body_pos_w[:, idx, :]
+-            # current index in concatenated positions will be len(positions_list)
+-            link_indices[ln] = len(positions_list)
+-            positions_list.append(link_pos.unsqueeze(1))
+-
+-    # Concatenate positions -> (num_envs, n_links, 3)
+-    positions = torch.cat(positions_list, dim=1)
+-
+-    # Compute relative vectors from each considered link to projectile: (num_envs, n_links, 3)
+-    rel = proj_pos.unsqueeze(1) - positions
+-    distances = torch.norm(rel, dim=-1)  # (num_envs, n_links)
+-
+-    # Base penalty per link: purely distance-based (no approach-speed term)
+-    # Linear ramp from 0 at max_distance to penalty_scale at distance=0
+-    base_penalty_each = float(penalty_scale) * (1.0 - distances / float(max_distance))
+-    base_penalty_each = torch.clamp(base_penalty_each, min=float(penalty_scale), max=0.0)
+-
+-    # Zero out penalties beyond max_distance per link
+-    penalty_each = torch.where(distances >= float(max_distance), torch.zeros_like(base_penalty_each), base_penalty_each)
++    # robot base position
++    asset: Articulation = env.scene[asset_cfg.name]
++    base_pos = asset.data.body_pos_w[:, 0, :]
+ 
+-    # Amplify penalty for lidar_link if present: we care strongly about the lidar
+-    # being hit or closely approached (sensor protection). Multiply the per-link
+-    # penalty by a factor so that close approaches to `lidar_link` are punished
+-    # more heavily than other links. This only affects that link's penalty;
+-    # the overall penalty still uses the minimum-distance link.
+-    try:
+-        if "lidar_link" in link_indices:
+-            lidar_idx = link_indices["lidar_link"]
+-            # Make lidar penalty more severe. Factor selected empirically —
+-            # increase if you want even stronger protection.
+-            lidar_factor = 3.0
+-            lidar_pen = penalty_each[:, lidar_idx] * float(lidar_factor)
+-            # Clamp to penalty_scale min (can't exceed the configured worst penalty)
+-            lidar_pen = torch.clamp(lidar_pen, min=float(penalty_scale), max=0.0)
+-            penalty_each[:, lidar_idx] = lidar_pen
+-    except Exception:
+-        # If anything goes wrong with link indexing, fall back silently.
+-        pass
++    # candidate projectile names
++    scene_names = list(env.scene.keys())
++    candidates = [] if projectile_names is None else list(projectile_names)
++    if projectile_names is None:
++        for n in scene_names:
++            if "projectile" in n.lower() or "obstacle" in n.lower():
++                candidates.append(n)
+ 
+-    # Select the minimum distance link per environment (the one that matters most)
+-    min_idx = distances.argmin(dim=1)  # (num_envs,)
+-    batch_idx = torch.arange(env.num_envs, device=env.device)
+-    penalty = penalty_each[batch_idx, min_idx]
++    if len(candidates) == 0:
++        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+ 
+-    return penalty
++    min_dists = None
++    for name in candidates:
++        try:
++            obj = env.scene[name]
++            pos = obj.data.body_pos_w[:, 0, :]
++        except Exception:
++            continue
++        d = torch.norm(base_pos - pos, dim=1)
++        min_dists = d if min_dists is None else torch.minimum(min_dists, d)
++
++    if min_dists is None:
++        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+ 
++    hit = min_dists < float(threshold)
++    out = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
++    out[hit] = float(penalty)
++    return out
+ 
+ 
+-def projectile_distance(
+-    env: ManagerBasedRLEnv,
++def base_velocity_reward(
++    env: ManagerBasedRLEnv, 
++    asset_cfg: SceneEntityCfg, 
++    scale: float = 100.0
+ ) -> torch.Tensor:
+-
+-    try:
+-        projectile = env.scene["Projectile"]
+-        proj_pos = projectile.data.root_pos_w  # shape: (num_envs, 3)
+-    except (KeyError, AttributeError):
+-        # Projectile not spawned yet, no reward
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-    
+-    # Get robot base position
+-    robot = env.scene["robot"]
+-    robot_pos = robot.data.root_pos_w  # shape: (num_envs, 3)
+-    
+-    # Compute distance
+-    distance = torch.norm(proj_pos - robot_pos, dim=-1)  # shape: (num_envs,)
++    """Reward for standing still (minimal base velocity).
+     
+-    # Initialize reward tensor
+-    reward = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-    
+-    # Hard penalty for distance < 2m (too close!)
+-    too_close = distance < 1.0
+-    reward[too_close] = -10.0
++    Penalizes linear and angular velocity of the robot base.
++    Higher scale = stronger penalty for movement.
++    """
++    asset: Articulation = env.scene[asset_cfg.name]
+     
+-    # Neutral zone for 2m <= distance <= 3m (safe, but no bonus)
+-    # (no change needed, already 0)
++    # Get base velocities
++    lin_vel = torch.linalg.norm(asset.data.root_lin_vel_w, dim=1)  # (num_envs,)
++    ang_vel = torch.linalg.norm(asset.data.root_ang_vel_w, dim=1)  # (num_envs,)
+     
+-    # Linear reward for distance > 3m (extra distance = bonus)
+-    # Reward = (distance - 3.0) for each meter beyond 3m
+-    far = distance >= 1.5
+-    reward[far] = (distance[far] - 3.0)  # Linear excess distance reward
++    # Combined velocity penalty
++    velocity = lin_vel + 0.1 * ang_vel  # Weight angular velocity less
+     
+-    return reward
++    # Return negative reward (penalize movement)
++    return -scale * velocity
+ 
+ 
+-def torso_pitch_curriculum(
++def projectile_proximity_penalty(
+     env: ManagerBasedRLEnv,
+-    curriculum_step: int = 500,
+-    max_pitch_scale: float = 0.5,
++    asset_cfg: SceneEntityCfg,
++    projectile_name: str = "Projectile",
++    max_distance: float = 3.0,
++    penalty_scale: float = -30.0,
+ ) -> torch.Tensor:
+-    """Curriculum function that returns scaling factor for torso pitch perturbations.
++    """Penalty reward based on proximity to projectile.
+     
+-    Phase 1 (steps 0-curriculum_step): Returns 0 (no disturbance)
+-    Phase 2 (steps curriculum_step+): Returns value ramping from 0 to max_pitch_scale
++    Increases penalty as projectile approaches robot (within max_distance).
++    Uses smooth falloff based on distance.
++    """
++    asset: Articulation = env.scene[asset_cfg.name]
+     
+-    This is a curriculum function that returns a scalar per environment.
+-    The returned value can be used to scale torso pitch action perturbations.
++    try:
++        projectile = env.scene[projectile_name]
++    except KeyError:
++        # Projectile not in scene, no penalty
++        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+     
+-    Args:
+-        env: The RL environment
+-        curriculum_step: Training step at which to start perturbations
+-        max_pitch_scale: Maximum pitch scale to reach (0.5 = 50% of action range)
++    # Get positions
++    robot_pos = asset.data.root_pos_w  # (num_envs, 3)
++    projectile_pos = projectile.data.root_pos_w  # (num_envs, 3)
+     
+-    Returns:
+-        Tensor of shape (num_envs,) with scaling factors
+-    """
+-    # Get current training step
+-    step = env.common_step_counter
++    # Distance to projectile
++    distance = torch.linalg.norm(projectile_pos - robot_pos, dim=1)  # (num_envs,)
+     
+-    # Phase 1: Before curriculum_step, no perturbation
+-    if step < curriculum_step:
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
++    # Smooth penalty: increases as distance decreases
++    # At max_distance: penalty ≈ 0
++    # At distance 0: penalty = penalty_scale
++    within_range = distance < max_distance
++    penalty = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+     
+-    # Phase 2: Ramp up from 0 to max_pitch_scale
+-    # Linear ramp over 5000 steps (curriculum_step to curriculum_step + 5000)
+-    progress = float(step - curriculum_step) / 5000.0
+-    scale = min(progress, 1.0) * max_pitch_scale  # Clamp to max_pitch_scale
++    # For targets within range: penalty = penalty_scale * (1 - distance/max_distance)
++    penalty[within_range] = penalty_scale * (1.0 - distance[within_range] / max_distance)
+     
+-    # Return same scale for all environments
+-    return torch.full((env.num_envs,), scale, dtype=torch.float32, device=env.device)
+-
+-
+-def torso_pitch_reward(
+-    env: ManagerBasedRLEnv,
+-    asset_cfg: SceneEntityCfg,
+-    torso_link_name: str = "torso_link",
+-    head_link_candidates: list | None = None,
+-    scale: float = 5.0,
+-    max_pitch: float = 0.8,
+-) -> torch.Tensor:
+-    """Encourage torso pitch (bending) by rewarding absolute pitch angle.
+-
+-    This function attempts to compute a pitch estimate for the torso by
+-    finding a second link to compute a torso-to-head vector (preferred
+-    candidates are provided). If a quaternion is available for the torso
+-    body, it would be preferable, but to keep this robust across different
+-    Articulation representations we compute pitch from link positions when
+-    possible.
+-
+-    Returns a per-environment scalar reward encouraging larger absolute
+-    torso pitch up to `max_pitch` (radians). The reward is scaled by
+-    `scale` and clipped.
+-    """
+-    robot: Articulation = env.scene[asset_cfg.name]
+-
+-    # Default candidate head links if none provided
+-    if head_link_candidates is None:
+-        head_link_candidates = ["head_link", "neck_link", "lidar_link"]
+-
+-    # Resolve body names
+-    try:
+-        body_names = list(robot.body_names)
+-    except Exception:
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-
+-    if torso_link_name not in body_names:
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-
+-    torso_idx = body_names.index(torso_link_name)
+-
+-    # Choose the first available candidate link to estimate pitch direction
+-    other_idx = None
+-    for cand in head_link_candidates:
+-        if cand in body_names and cand != torso_link_name:
+-            other_idx = body_names.index(cand)
+-            break
+-
+-    # Need positions for torso and other link
+-    try:
+-        torso_pos = robot.data.body_pos_w[:, torso_idx, :]  # (num_envs, 3)
+-    except Exception:
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-
+-    if other_idx is None:
+-        # No secondary link available; cannot estimate pitch reliably
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-
+-    try:
+-        other_pos = robot.data.body_pos_w[:, other_idx, :]
+-    except Exception:
+-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+-
+-    # Vector from torso to other link
+-    v = other_pos - torso_pos  # (num_envs, 3)
+-    horiz = torch.sqrt(v[:, 0] ** 2 + v[:, 1] ** 2) + 1e-8
+-    pitch = torch.atan2(v[:, 2], horiz)  # radians; positive = up
+-
+-    # Reward absolute pitch (encourage bending away from upright). Clip to max_pitch
+-    abs_pitch = torch.clamp(torch.abs(pitch), max=float(max_pitch))
+-
+-    # Scale to reward range
+-    reward = float(scale) * (abs_pitch / float(max_pitch))
+-
+-    return reward.to(device=env.device)
+-
++    return penalty
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/terminations.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/terminations.py
+index a278ab9..28c1ac8 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/terminations.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/terminations.py
+@@ -1,7 +1,6 @@
+ 
+ from __future__ import annotations
+ 
+-import sys
+ import torch
+ from typing import TYPE_CHECKING
+ 
+@@ -15,13 +14,22 @@ if TYPE_CHECKING:
+ def base_height_below_threshold(
+     env: ManagerBasedRLEnv, threshold: float, asset_cfg: SceneEntityCfg
+ ) -> torch.Tensor:
++    """Terminate if base height drops below threshold (robot fell down).
++    
++    Args:
++        env: The environment.
++        threshold: Height threshold (in meters). Episode terminates if base_height < threshold.
++        asset_cfg: Configuration for the asset (robot).
++    
++    Returns:
++        Boolean tensor indicating which environments should terminate.
++    """
+     # extract robot asset
+     asset: Articulation = env.scene[asset_cfg.name]
+     # get base height (z-position of root body)
+     base_height = asset.data.body_pos_w[:, 0, 2]
+     # compute termination condition
+     is_terminated = base_height < threshold
+-
+     return is_terminated
+ 
+ 
+@@ -29,16 +37,19 @@ def projectile_hit(
+     env: ManagerBasedRLEnv,
+     asset_cfg: SceneEntityCfg,
+     projectile_names: list | None = None,
+-    threshold: float = 0.1,
++    threshold: float = 0.3,
+ ) -> torch.Tensor:
++    """Terminate episode when any projectile comes within `threshold` of robot base.
+ 
+-    # Get robot and projectiles
+-    robot: Articulation = env.scene[asset_cfg.name]
+-    
+-    # Get all body positions of the robot: shape (num_envs, num_bodies, 3)
+-    robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)
+-    
+-    # Find projectiles
++    This mirrors `projectile_hit_penalty` in rewards and uses the same name
++    matching heuristic when `projectile_names` is None.
++    Returns a boolean tensor (shape (num_envs,)) where True indicates termination.
++    """
++    # robot base position
++    asset: Articulation = env.scene[asset_cfg.name]
++    base_pos = asset.data.body_pos_w[:, 0, :]
++
++    # candidate projectile names
+     scene_names = list(env.scene.keys())
+     candidates = [] if projectile_names is None else list(projectile_names)
+     if projectile_names is None:
+@@ -49,51 +60,17 @@ def projectile_hit(
+     if len(candidates) == 0:
+         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+ 
+-    hit = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+-    
+-    # Check distance from projectile to each robot body
++    min_dists = None
+     for name in candidates:
+-
+-        obj = env.scene[name]
+-        # Get projectile position
+         try:
+-            proj_pos = obj.data.root_pos_w  # shape: (num_envs, 3)
+-        except AttributeError:
+-            proj_pos = obj.data.body_pos_w[:, 0, :]  # shape: (num_envs, 3)
+-        
+-        # Compute distance from projectile to each robot body
+-        # proj_pos: (num_envs, 3) -> (num_envs, 1, 3)
+-        # robot_body_positions: (num_envs, num_bodies, 3)
+-        # distance: (num_envs, num_bodies)
+-        distances = torch.norm(
+-            robot_body_positions - proj_pos.unsqueeze(1),
+-            dim=-1
+-        )
+-        
+-        # Find minimum distance to any body for each environment
+-        min_dist_per_env = distances.min(dim=1)[0]  # shape: (num_envs,)
+-        
+-        # Update hit mask
+-        hit = hit | (min_dist_per_env < float(threshold))
+-            
+-    return hit
+-
+-
+-def projectile_hit_after_steps(
+-    env: ManagerBasedRLEnv,
+-    asset_cfg: SceneEntityCfg,
+-    projectile_names: list | None = None,
+-    threshold: float = 0.1,
+-    start_step: int = 2000,
+-) -> torch.Tensor:
+-    """Return hit mask only after `start_step` training iterations.
+-
+-    Before `start_step`, this returns all-false so termination is disabled.
+-    After `start_step`, delegates to `projectile_hit` to compute per-env hits.
+-    """
+-    # Use env.common_step_counter (training iterations) to gate termination
+-    if getattr(env, "common_step_counter", 0) < int(start_step):
++            obj = env.scene[name]
++            pos = obj.data.body_pos_w[:, 0, :]
++        except Exception:
++            continue
++        d = torch.norm(base_pos - pos, dim=1)
++        min_dists = d if min_dists is None else torch.minimum(min_dists, d)
++
++    if min_dists is None:
+         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+ 
+-    # Delegate to existing projectile_hit implementation
+-    return projectile_hit(env, asset_cfg, projectile_names=projectile_names, threshold=threshold)
+\ No newline at end of file
++    return min_dists < float(threshold)
+\ No newline at end of file
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/launch_projectile.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/launch_projectile.py
+index 8b1c936..dd195f2 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/launch_projectile.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/launch_projectile.py
+@@ -1,13 +1,15 @@
+ # standalone_projectile.py
+ # Launch a projectile toward scene center every second
+ 
++import carb
+ import math
+ import numpy as np
+-from pxr import Gf, UsdPhysics, PhysxSchema, Usd
++from pxr import Gf, UsdPhysics, PhysxSchema
+ 
+ import omni
+ from omni.isaac.core.utils.stage import get_current_stage, close_stage
+ from omni.isaac.core.utils.prims import create_prim
++from omni.isaac.core.utils.nucleus import get_assets_root_path
+ from omni.isaac.core.physics import get_physx_scene
+ from omni.isaac.core.simulation_context import SimulationContext
+ from omni.isaac.core.prims import RigidPrimView
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/multi_asset.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/multi_asset.py
+index 1b88ead..715dcfe 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/multi_asset.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/multi_asset.py
+@@ -22,8 +22,8 @@ import argparse
+ from isaaclab.app import AppLauncher
+ 
+ # add argparse arguments
+-parser = argparse.ArgumentParser(description="Demo on throwing sphere from random direction.")
+-parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
++parser = argparse.ArgumentParser(description="Demo on spawning different objects in multiple environments.")
++parser.add_argument("--num_envs", type=int, default=512, help="Number of environments to spawn.")
+ # append AppLauncher cli args
+ AppLauncher.add_app_launcher_args(parser)
+ # parse the arguments
+@@ -36,17 +36,19 @@ simulation_app = app_launcher.app
+ """Rest everything follows."""
+ 
+ import random
+-import math
+ 
+ from isaacsim.core.utils.stage import get_current_stage
+ from pxr import Gf, Sdf
+ 
+ import isaaclab.sim as sim_utils
+-import torch
+ from isaaclab.assets import (
++    Articulation,
++    ArticulationCfg,
+     AssetBaseCfg,
+     RigidObject,
+     RigidObjectCfg,
++    RigidObjectCollection,
++    RigidObjectCollectionCfg,
+ )
+ from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
+ from isaaclab.sim import SimulationContext
+@@ -57,6 +59,8 @@ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+ # Pre-defined Configuration
+ ##
+ 
++from isaaclab_assets.robots.anymal import ANYDRIVE_3_LSTM_ACTUATOR_CFG  # isort: skip
++
+ 
+ ##
+ # Randomization events.
+@@ -89,7 +93,7 @@ def randomize_shape_color(prim_path_expr: str):
+ 
+ @configclass
+ class MultiObjectSceneCfg(InteractiveSceneCfg):
+-    """Configuration for a sphere-throwing demo."""
++    """Configuration for a multi-object scene."""
+ 
+     # ground plane
+     ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
+@@ -99,21 +103,117 @@ class MultiObjectSceneCfg(InteractiveSceneCfg):
+         prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
+     )
+ 
+-    # spheres to throw at center
+-    sphere: RigidObjectCfg = RigidObjectCfg(
+-        prim_path="/World/envs/env_.*/Sphere",
+-        spawn=sim_utils.SphereCfg(
+-            radius=0.15,
+-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0), metallic=0.2),
++    # rigid object
++    object: RigidObjectCfg = RigidObjectCfg(
++        prim_path="/World/envs/env_.*/Object",
++        spawn=sim_utils.MultiAssetSpawnerCfg(
++            assets_cfg=[
++                sim_utils.ConeCfg(
++                    radius=0.3,
++                    height=0.6,
++                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0), metallic=0.2),
++                ),
++                sim_utils.CuboidCfg(
++                    size=(0.3, 0.3, 0.3),
++                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=0.2),
++                ),
++                sim_utils.SphereCfg(
++                    radius=0.3,
++                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0), metallic=0.2),
++                ),
++            ],
++            random_choice=True,
+             rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                 solver_position_iteration_count=4, solver_velocity_iteration_count=0
+             ),
+-            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
++            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+             collision_props=sim_utils.CollisionPropertiesCfg(),
+         ),
+         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 2.0)),
+     )
+ 
++    # object collection
++    object_collection: RigidObjectCollectionCfg = RigidObjectCollectionCfg(
++        rigid_objects={
++            "object_A": RigidObjectCfg(
++                prim_path="/World/envs/env_.*/Object_A",
++                spawn=sim_utils.SphereCfg(
++                    radius=0.1,
++                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=0.2),
++                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
++                        solver_position_iteration_count=4, solver_velocity_iteration_count=0
++                    ),
++                    mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
++                    collision_props=sim_utils.CollisionPropertiesCfg(),
++                ),
++                init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.5, 2.0)),
++            ),
++            "object_B": RigidObjectCfg(
++                prim_path="/World/envs/env_.*/Object_B",
++                spawn=sim_utils.CuboidCfg(
++                    size=(0.1, 0.1, 0.1),
++                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=0.2),
++                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
++                        solver_position_iteration_count=4, solver_velocity_iteration_count=0
++                    ),
++                    mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
++                    collision_props=sim_utils.CollisionPropertiesCfg(),
++                ),
++                init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.5, 2.0)),
++            ),
++            "object_C": RigidObjectCfg(
++                prim_path="/World/envs/env_.*/Object_C",
++                spawn=sim_utils.ConeCfg(
++                    radius=0.1,
++                    height=0.3,
++                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=0.2),
++                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
++                        solver_position_iteration_count=4, solver_velocity_iteration_count=0
++                    ),
++                    mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
++                    collision_props=sim_utils.CollisionPropertiesCfg(),
++                ),
++                init_state=RigidObjectCfg.InitialStateCfg(pos=(0.5, 0.0, 2.0)),
++            ),
++        }
++    )
++
++    # articulation
++    robot: ArticulationCfg = ArticulationCfg(
++        prim_path="/World/envs/env_.*/Robot",
++        spawn=sim_utils.MultiUsdFileCfg(
++            usd_path=[
++                f"{ISAACLAB_NUCLEUS_DIR}/Robots/ANYbotics/ANYmal-C/anymal_c.usd",
++                f"{ISAACLAB_NUCLEUS_DIR}/Robots/ANYbotics/ANYmal-D/anymal_d.usd",
++            ],
++            random_choice=True,
++            rigid_props=sim_utils.RigidBodyPropertiesCfg(
++                disable_gravity=False,
++                retain_accelerations=False,
++                linear_damping=0.0,
++                angular_damping=0.0,
++                max_linear_velocity=1000.0,
++                max_angular_velocity=1000.0,
++                max_depenetration_velocity=1.0,
++            ),
++            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
++                enabled_self_collisions=True, solver_position_iteration_count=4, solver_velocity_iteration_count=0
++            ),
++            activate_contact_sensors=True,
++        ),
++        init_state=ArticulationCfg.InitialStateCfg(
++            pos=(0.0, 0.0, 0.6),
++            joint_pos={
++                ".*HAA": 0.0,  # all HAA
++                ".*F_HFE": 0.4,  # both front HFE
++                ".*H_HFE": -0.4,  # both hind HFE
++                ".*F_KFE": -0.8,  # both front KFE
++                ".*H_KFE": 0.8,  # both hind KFE
++            },
++        ),
++        actuators={"legs": ANYDRIVE_3_LSTM_ACTUATOR_CFG},
++    )
++
+ 
+ ##
+ # Simulation Loop
+@@ -123,50 +223,45 @@ class MultiObjectSceneCfg(InteractiveSceneCfg):
+ def run_simulator(sim: SimulationContext, scene: InteractiveScene):
+     """Runs the simulation loop."""
+     # Extract scene entities
+-    sphere: RigidObject = scene["sphere"]
+-    
++    # note: we only do this here for readability.
++    rigid_object: RigidObject = scene["object"]
++    rigid_object_collection: RigidObjectCollection = scene["object_collection"]
++    robot: Articulation = scene["robot"]
+     # Define simulation stepping
+     sim_dt = sim.get_physics_dt()
+     count = 0
+-    num_envs = sphere.data.root_pos_w.shape[0]
+-    center = torch.tensor([0.0, 0.0, 0.5], device=sim.device)  # Target center position at ground level
+-    spawn_height = 3.0  # Height from which to throw (3 meters)
+-    area_size = 5.0  # 5x5 meter area
+-    
+     # Simulation loop
+     while simulation_app.is_running():
+-        # Reset every 250 steps
++        # Reset
+         if count % 250 == 0:
+             # reset counter
+             count = 0
+-            
+-            # Throw sphere from random position within 5x5 meter area towards center
+-            root_state = sphere.data.default_root_state.clone()
+-            
+-            for env_idx in range(num_envs):
+-                # Randomly pick position within 5x5 meter area around center
+-                spawn_x = center[0] - area_size / 2.0 + random.random() * area_size
+-                spawn_y = center[1] - area_size / 2.0 + random.random() * area_size
+-                spawn_z = center[2] + spawn_height  # 3 meters above center
+-                
+-                # Position
+-                root_state[env_idx, 0:3] = torch.tensor([spawn_x, spawn_y, spawn_z], device=sim.device)
+-                
+-                # Velocity towards center
+-                spawn_pos = torch.tensor([spawn_x, spawn_y, spawn_z], device=sim.device)
+-                direction = center - spawn_pos
+-                direction = direction / (torch.norm(direction) + 1e-6)
+-                # Apply velocity towards center
+-                root_state[env_idx, 7:10] = direction * 5.0  # Velocity magnitude towards center
+-            
++            # reset the scene entities
++            # object
++            root_state = rigid_object.data.default_root_state.clone()
++            root_state[:, :3] += scene.env_origins
++            rigid_object.write_root_pose_to_sim(root_state[:, :7])
++            rigid_object.write_root_velocity_to_sim(root_state[:, 7:])
++            # object collection
++            object_state = rigid_object_collection.data.default_object_state.clone()
++            object_state[..., :3] += scene.env_origins.unsqueeze(1)
++            rigid_object_collection.write_object_link_pose_to_sim(object_state[..., :7])
++            rigid_object_collection.write_object_com_velocity_to_sim(object_state[..., 7:])
++            # robot
++            # -- root state
++            root_state = robot.data.default_root_state.clone()
+             root_state[:, :3] += scene.env_origins
+-            sphere.write_root_pose_to_sim(root_state[:, :7])
+-            sphere.write_root_velocity_to_sim(root_state[:, 7:])
+-            
++            robot.write_root_pose_to_sim(root_state[:, :7])
++            robot.write_root_velocity_to_sim(root_state[:, 7:])
++            # -- joint state
++            joint_pos, joint_vel = robot.data.default_joint_pos.clone(), robot.data.default_joint_vel.clone()
++            robot.write_joint_state_to_sim(joint_pos, joint_vel)
+             # clear internal buffers
+             scene.reset()
+-            print(f"[INFO]: Reset! Throwing sphere from random position (3m height) within 5x5m area towards center!")
++            print("[INFO]: Resetting scene state...")
+ 
++        # Apply action to robot
++        robot.set_joint_position_target(robot.data.default_joint_pos)
+         # Write data to sim
+         scene.write_data_to_sim()
+         # Perform step
+@@ -191,8 +286,10 @@ def main():
+         scene = InteractiveScene(scene_cfg)
+ 
+     with Timer("[INFO] Time to randomize scene: "):
+-        # Randomization for spheres
+-        randomize_shape_color(scene_cfg.sphere.prim_path)
++        # DO YOUR OWN OTHER KIND OF RANDOMIZATION HERE!
++        # Note: Just need to acquire the right attribute about the property you want to set
++        # Here is an example on setting color randomly
++        randomize_shape_color(scene_cfg.object.prim_path)
+ 
+     # Play the simulator
+     sim.reset()
+diff --git a/test_penalty_debug.py b/test_penalty_debug.py
+deleted file mode 100644
+index 1379143..0000000
+--- a/test_penalty_debug.py
++++ /dev/null
+@@ -1,64 +0,0 @@
+-#!/usr/bin/env python3
+-"""Debug script to check projectile hit penalty calculation."""
+-
+-import torch
+-import isaaclab.sim as sim_utils
+-from isaaclab.app import AppLauncher
+-from isaaclab.envs import ManagerBasedRLEnv
+-from h12_bullet_time.tasks.manager_based.h12_bullet_time import agents
+-from h12_bullet_time.tasks.manager_based.h12_bullet_time.h12_bullet_time_env_cfg_curriculum_phase import (
+-    H12BulletTimeEnvCfg_CurriculumPhasePlay,
+-)
+-
+-# Create app
+-app_launcher = AppLauncher()
+-simulation_app = app_launcher.app
+-
+-# Create environment
+-env_cfg = H12BulletTimeEnvCfg_CurriculumPhasePlay()
+-env = ManagerBasedRLEnv(cfg=env_cfg)
+-
+-print(f"Num envs: {env.num_envs}")
+-print(f"Projectile in scene: {'Projectile' in env.scene.keys()}")
+-print(f"Robot in scene: {'robot' in env.scene.keys()}")
+-
+-# Run for a few steps
+-obs, _ = env.reset()
+-print(f"\nInitial observation shape: {obs.shape}")
+-
+-for step in range(50):
+-    # Get projectile and robot positions
+-    proj = env.scene["Projectile"]
+-    robot = env.scene["robot"]
+-    
+-    proj_pos = proj.data.root_pos_w  # (num_envs, 3)
+-    robot_pos = robot.data.root_pos_w  # (num_envs, 3)
+-    robot_bodies = robot.data.body_pos_w  # (num_envs, num_bodies, 3)
+-    
+-    # Calculate distance
+-    distance = torch.norm(proj_pos - robot_pos, dim=-1)
+-    
+-    # Calculate body distances
+-    body_distances = torch.norm(
+-        robot_bodies - proj_pos.unsqueeze(1),
+-        dim=-1
+-    )
+-    min_body_dist = body_distances.min(dim=1)[0]
+-    
+-    # Get penalty
+-    reward = env.reward_manager.compute(dt=env.step_dt)
+-    penalty_term = reward[:, env.reward_manager._term_names.index("projectile_penalty")]
+-    
+-    if step % 10 == 0:
+-        print(f"\nStep {step}:")
+-        print(f"  Proj pos (env 0): {proj_pos[0].tolist()}")
+-        print(f"  Robot pos (env 0): {robot_pos[0].tolist()}")
+-        print(f"  Distance (env 0): {distance[0]:.3f}m")
+-        print(f"  Min body distance (env 0): {min_body_dist[0]:.3f}m")
+-        print(f"  Penalty signal (env 0): {penalty_term[0]:.4f}")
+-    
+-    actions = torch.zeros(env.num_envs, env.action_manager.action.shape[-1], device=env.device)
+-    obs, reward, terminated, truncated, info = env.step(actions)
+-
+-simulation_app.close()
+-print("\nDone!")

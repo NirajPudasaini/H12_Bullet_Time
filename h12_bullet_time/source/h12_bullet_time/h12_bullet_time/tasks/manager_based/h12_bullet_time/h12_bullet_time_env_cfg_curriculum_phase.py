@@ -3,14 +3,6 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""
-Curriculum Learning Configuration for H12 Bullet Time
-
-Phase 1 (Steps 0-500K): Stand/Balance only (v0)
-Phase 2 (Steps 500K+): Introduce projectiles + dodging (v1)
-
-This config starts easy and gradually introduces difficulty.
-"""
 
 import math
 
@@ -216,18 +208,6 @@ class RewardsCfg:
         weight=10,
         params={"asset_cfg": SceneEntityCfg("robot"), "scale": 100.0},
     )
-
-    # # Encourage torso pitching so the robot can dodge by bending its torso.
-    # torso_pitch = RewTerm(
-    #     func=local_mdp.torso_pitch_reward,
-    #     weight=3.0,
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot"),
-    #         "torso_link_name": "torso_link",
-    #         "max_pitch": 0.8,
-    #         "scale": 5.0,
-    #     },
-    # )
 
     # Phase 2 reward (controlled by curriculum manager, see CurriculumCfg below)
     # Starts at weight=0.0 (Phase 1), automatically set to 1.0 at step 500K (Phase 2)

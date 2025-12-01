@@ -8,141 +8,113 @@ import torch
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
-
 from isaaclab.managers import SceneEntityCfg
 
 
 def launch_projectile(
-    env: ManagerBasedRLEnv,
-    env_ids: torch.Tensor,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("Projectile"),
-)-> None:
-
-    # Parameters (defaults chosen to spawn relative to torso link)
-    spawn_distance = 1.5
-    height_offset = 0.85
-    throw_speed = 5.0
-    offset_range_x = 1.0
-    offset_range_z = 0.1
-    # Randomization: allow +/-20% variation on spawn_distance and height_offset per env
-    var_frac = 0.2  # 20%
-
-    # Get projectile and robot from scene
-    proj = env.scene[asset_cfg.name]
-    robot = env.scene["robot"]
-
-    # Try to get body link positions; fall back to root if not available
-    try:
-        body_names = list(robot.body_names)
-    except Exception:
-        body_names = []
-
-    root_pos = robot.data.root_pos_w  # (num_envs, 3)
-    device = root_pos.device
-
-    # Default center positions for the envs being reset
-    center = root_pos[env_ids]
-    # If torso (or requested link) exists, use that link's world position
-    if "torso" in body_names:
-        idx = body_names.index("torso")
-        link_pos = robot.data.body_pos_w[:, idx, :]
-        center = link_pos[env_ids]
-
-    n = env_ids.numel()
-
-    # Random offsets
-    # x_offset only to the right: sample in [0, offset_range_x]
-    x_offset = torch.rand((n,), device=device, dtype=torch.float32) * offset_range_x
-    z_offset = torch.rand((n,), device=device, dtype=torch.float32) * 2 * offset_range_z - offset_range_z
-
-    # Per-env random scaling in [1-0.2, 1+0.2]
-    sd_scale = 1.0 + (torch.rand((n,), device=device, dtype=torch.float32) * 2.0 * var_frac - var_frac)
-    ho_scale = 1.0 + (torch.rand((n,), device=device, dtype=torch.float32) * 2.0 * var_frac - var_frac)
-    spawn_distance_per_env = spawn_distance * sd_scale
-    height_offset_per_env = height_offset * ho_scale
-
-    # Spawn position: in front of link and height offset above link
-    spawn_pos = torch.zeros((n, 3), device=device, dtype=torch.float32)
-    # apply per-env spawn distance and height offset with random +/-20% variation
-    spawn_pos[:, 0] = center[:, 0] + spawn_distance_per_env + x_offset
-    spawn_pos[:, 1] = center[:, 1]
-    spawn_pos[:, 2] = center[:, 2] + height_offset_per_env + z_offset
-
-    # Identity quaternion
-    quats = torch.zeros((n, 4), device=device, dtype=torch.float32)
-    quats[:, 0] = 1.0
-
-    # Linear velocity toward robot (-X)
-    lin_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
-    lin_vel[:, 0] = -throw_speed
-
-    ang_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
-
-    pose = torch.cat([spawn_pos, quats], dim=-1)
-    velocity = torch.cat([lin_vel, ang_vel], dim=-1)
-
-    proj.write_root_pose_to_sim(pose, env_ids)
-    proj.write_root_velocity_to_sim(velocity, env_ids)
-    # Debug print: show spawn info for the envs we updated
-    # try:
-    #     sp = spawn_pos.cpu().numpy()
-    #     lv = lin_vel.cpu().numpy()
-    #     ids = env_ids.cpu().numpy()
-    #     print(f"[launch_projectile] env_ids={ids.tolist()}, spawn_pos={sp.tolist()}, lin_vel={lv.tolist()}")
-    # except Exception:
-    #     # Fallback safe print if tensors are not CPU-accessible
-    #     print(f"[launch_projectile] spawned projectiles for env_ids={env_ids}")
-
-
-def launch_projectile_curriculum(
-    env: ManagerBasedRLEnv,
-    env_ids: torch.Tensor,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("Projectile"),
-    curriculum_step: int = 2000,
+    env: ManagerBasedRLEnv, 
+    env_ids: torch.Tensor, 
+    asset_cfg: SceneEntityCfg | None = None
 ) -> None:
+    """Event handler to spawn and launch spherical projectiles toward the robot.
 
-    # Only launch projectiles after curriculum milestone
-    # Note: common_step_counter counts training iterations, not environment steps
-    if env.common_step_counter < curriculum_step:
+    This is intended to be called at episode reset (EventTerm with mode="reset").
+    The function spawns projectiles 3 meters above the robot at random azimuth
+    angles and 5m horizontal distance, then gives them velocity to fall toward the robot.
+    
+    Args:
+        env: The ManagerBasedRLEnv environment instance.
+        env_ids: Indices of environments to reset projectiles for.
+        asset_cfg: Optional scene entity config for projectile (defaults to "Projectile").
+    """
+    # Internal configuration
+    projectile_name = "Projectile"
+    spawn_distance_xy = 5.0  # horizontal distance from robot
+    spawn_height = 3.0       # height above robot base
+    min_speed = 4.0
+    max_speed = 8.0
+
+    # Try to get projectile and robot from scene
+    try:
+        proj = env.scene[projectile_name]
+        robot = env.scene["robot"]
+        robot_base_pos = robot.data.body_pos_w[:, 0, :]  # Body 0 is the base
+    except (KeyError, AttributeError, IndexError):
+        # Assets not available, exit gracefully
+        return
+
+    device = robot_base_pos.device
+    
+    # Convert env_ids to long tensor
+    env_ids_long = env_ids.long() if isinstance(env_ids, torch.Tensor) else torch.tensor(env_ids, device=device, dtype=torch.long)
+    n = env_ids_long.numel()
+    if n == 0:
         return
     
-    # Call the regular launch_projectile function
-    launch_projectile(env, env_ids, asset_cfg)
-
-
-# def apply_torso_pitch_disturbance(
-#     env: ManagerBasedRLEnv,
-# ) -> None:
-
-#     # Get the torso pitch curriculum scale (returns 0 before curriculum_step, ramps up after)
-#     from . import rewards as mdp_rewards
+    # Get robot base positions for the envs being reset
+    base_pos = robot_base_pos[env_ids_long]  # shape (n, 3)
     
-#     scale = mdp_rewards.torso_pitch_curriculum(
-#         env,
-#         curriculum_step=500,
-#         max_pitch_scale=0.5,
-#     )  # shape: (num_envs,)
+    # Random azimuth angles (around the robot)
+    az = torch.rand(n, device=device) * 2 * math.pi
     
-#     if scale.max() > 0:  # Only apply if there's non-zero scale
-#         # Torso joint is at index 12 in the joint_names list in ActionsCfg
-#         # Joint order: left_leg (6) + right_leg (6) + torso (1) = index 12
-#         torso_pitch_idx = 12
-        
-#         num_envs = env.num_envs
-        
-#         # Generate random pitch perturbations (Gaussian noise)
-#         perturbation = torch.randn(
-#             (num_envs,),
-#             device=env.device,
-#             dtype=torch.float32,
-#         ) * scale  # Scale by curriculum value
-        
-#         # Apply to action directly
-#         # env.action_manager.action is the processed action tensor
-#         # We add perturbation to the torso pitch joint command
-#         try:
-#             env.action_manager.action[:, torso_pitch_idx] += perturbation
-#         except (IndexError, RuntimeError):
-#             # If action tensor shape is different, silently skip
-#             pass
-
+    # Spawn position: offset in XY by spawn_distance_xy, add spawn_height to Z
+    dx_spawn = torch.cos(az) * spawn_distance_xy
+    dy_spawn = torch.sin(az) * spawn_distance_xy
+    
+    spawn_pos = base_pos.clone()
+    spawn_pos[:, 0] += dx_spawn
+    spawn_pos[:, 1] += dy_spawn
+    spawn_pos[:, 2] += spawn_height
+    
+    # Create identity quaternions (no rotation) [w, x, y, z]
+    quats = torch.zeros((n, 4), device=device, dtype=torch.float32)
+    quats[:, 0] = 1.0
+    
+    # Velocity: toward robot + downward
+    to_base_xy = base_pos[:, :2] - spawn_pos[:, :2]
+    to_base_z = torch.full_like(to_base_xy[:, :1], -spawn_height)
+    
+    to_base = torch.cat([to_base_xy, to_base_z], dim=-1)
+    to_base_dist = torch.norm(to_base, dim=-1, keepdim=True).clamp(min=1e-6)
+    direction_to_base = to_base / to_base_dist
+    
+    # Random speed for each projectile
+    speeds = (min_speed + (max_speed - min_speed) * torch.rand(n, device=device)).unsqueeze(-1)
+    vel = direction_to_base * speeds
+    
+    # Zero angular velocity
+    ang_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
+    
+    # Update FULL batch buffers (not just reset indices!)
+    # This is critical: write_data_to_sim() needs the full batch
+    full_pos = proj.data.body_pos_w[:, 0, :].clone()
+    full_quat = proj.data.body_quat_w[:, 0, :].clone()
+    full_lin_vel = proj.data.body_lin_vel_w[:, 0, :].clone()
+    full_ang_vel = proj.data.body_ang_vel_w[:, 0, :].clone()
+    
+    # Update only reset environments
+    full_pos[env_ids_long] = spawn_pos
+    full_quat[env_ids_long] = quats
+    full_lin_vel[env_ids_long] = vel
+    full_ang_vel[env_ids_long] = ang_vel
+    
+    # Write full batch back
+    proj.data.body_pos_w[:, 0, :] = full_pos
+    proj.data.body_quat_w[:, 0, :] = full_quat
+    proj.data.body_lin_vel_w[:, 0, :] = full_lin_vel
+    proj.data.body_ang_vel_w[:, 0, :] = full_ang_vel
+    
+    # Critically important: write to physics engine
+    proj.write_data_to_sim()
+    
+    # Also update default state to ensure it persists through resets
+    try:
+        proj.data.default_root_state[env_ids_long, 0:3] = spawn_pos
+        proj.data.default_root_state[env_ids_long, 3:7] = quats
+        proj.data.default_root_state[env_ids_long, 7:10] = vel
+        proj.data.default_root_state[env_ids_long, 10:13] = ang_vel
+    except Exception:
+        pass
+    
+    print(f"[PROJ] Spawn {n} projectiles at {spawn_pos[0].cpu()}", file=sys.stderr)
+    sys.stderr.flush()
