@@ -11,10 +11,10 @@ import torch
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from isaacsim.core.simulation_manager import SimulationManager
 from pxr import UsdPhysics
 
 import isaaclab.sim as sim_utils
+from isaaclab.sim import SimulationContext
 import isaaclab.utils.string as string_utils
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.utils.math import (
@@ -232,8 +232,10 @@ class TofSensor(SensorBase):
 
         body_names_regex = [tracked_prim_path.replace("env_0", "env_*") for tracked_prim_path in tracked_prim_paths]
 
-        # obtain global simulation view
-        self._physics_sim_view = SimulationManager.get_physics_sim_view()
+        # obtain global simulation view from context
+        from isaaclab.sim import SimulationContext
+        sim_context = SimulationContext.instance()
+        self._physics_sim_view = sim_context.physics_sim_view
         # Create a prim view for all frames and initialize it
         # order of transforms coming out of view will be source frame followed by target frame(s)
         self._frame_physx_view = self._physics_sim_view.create_rigid_body_view(body_names_regex)

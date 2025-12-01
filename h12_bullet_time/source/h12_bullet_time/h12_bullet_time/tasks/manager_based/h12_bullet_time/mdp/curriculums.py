@@ -19,9 +19,9 @@ def modify_reward_weight(
     weight: float,
     num_steps: int,
 ) -> float:
-
     # Check if milestone has been reached
-    if env.common_step_counter > num_steps:
+    # Note: common_step_counter counts training iterations, NOT environment steps
+    if env.common_step_counter >= num_steps:
         # Get and update term configuration
         term_cfg = env.reward_manager.get_term_cfg(term_name)
         term_cfg.weight = weight

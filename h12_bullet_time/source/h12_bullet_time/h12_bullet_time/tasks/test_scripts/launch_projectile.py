@@ -1,13 +1,15 @@
 # standalone_projectile.py
 # Launch a projectile toward scene center every second
 
+import carb
 import math
 import numpy as np
-from pxr import Gf, UsdPhysics, PhysxSchema, Usd
+from pxr import Gf, UsdPhysics, PhysxSchema
 
 import omni
 from omni.isaac.core.utils.stage import get_current_stage, close_stage
 from omni.isaac.core.utils.prims import create_prim
+from omni.isaac.core.utils.nucleus import get_assets_root_path
 from omni.isaac.core.physics import get_physx_scene
 from omni.isaac.core.simulation_context import SimulationContext
 from omni.isaac.core.prims import RigidPrimView

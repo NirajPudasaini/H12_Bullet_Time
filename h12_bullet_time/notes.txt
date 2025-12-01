@@ -1,0 +1,13 @@
+- working file - 2025-11-24_18-56-25 
+- new training with teshe specs: 2025-11-24_19-21-38 
+    offset_range_x = 0.2
+    offset_range_z = 0.2
+- new phase training - H12BulletTimeEnvCfg_Curriculum_Phase - 2025-11-24_19-29-33 
+- new phase training - H12BulletTimeEnvCfg_Curriculum_Phase - 2025-11-24_19-31 - increased steps to 5k instead of 500 (not actual on plot)! 
+
+
+- 2025-11-24_19-3smth - added <2 -10 reward .. like hard hit simuluation ! 
+
+- 2025-11-24_19-42 - decreased the limit for distance for high penalty; changed from 2 to 1 !
+        - just run 
+            python ./h12_bullet_time/scripts/rsl_rl/play.py --task Template-H12-Bullet-Time-Curriculum-Phase --num_envs 1

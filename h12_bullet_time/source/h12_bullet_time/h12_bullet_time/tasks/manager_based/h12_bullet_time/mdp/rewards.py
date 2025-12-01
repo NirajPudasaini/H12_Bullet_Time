@@ -12,61 +12,161 @@ from isaaclab.managers import SceneEntityCfg
 
 from isaaclab.envs import ManagerBasedRLEnv
 
+def base_height_l2(env: ManagerBasedRLEnv, target_height: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Reward for maintaining base height close to target (default 1.0 m).
+    
+    Returns negative L2 distance from target height so higher is better.
+    """
+    # extract robot asset
+    asset: Articulation = env.scene[asset_cfg.name]
+    # get base height (z-position of root body)
+    base_height = asset.data.body_pos_w[:, 0, 2]
+    # compute L2 distance from target
+    height_error = base_height - target_height
+    # return negative squared error (so reward decreases as height deviates)
+    return -torch.square(height_error)
+
 
 def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
-
+    """Bonus reward for staying alive (not falling).
+    
+    Returns +1.0 for each timestep the robot is still running.
+    """
     # Return constant reward per environment (batch)
     return torch.ones(env.num_envs, dtype=torch.float32, device=env.device)
 
 
-def base_velocity_reward(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg,
-    scale: float = 10.0,
-) -> torch.Tensor:
-
+def knee_symmetry(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Reward for keeping left and right knees at similar distance from each other.
+    
+    Encourages symmetric leg posture by maintaining consistent distance between left and right knee bodies.
+    This helps prevent one leg from bending more than the other.
+    Returns negative L2 distance from target separation so higher is better.
+    """
+    # extract robot asset
     asset: Articulation = env.scene[asset_cfg.name]
+    
+    # Get body indices for left and right knees by name
+    body_names = asset.body_names
+    left_knee_idx = body_names.index("left_knee_link")
+    right_knee_idx = body_names.index("right_knee_link")
+    
+    # Get left and right knee body positions in world frame
+    left_knee_pos = asset.data.body_pos_w[:, left_knee_idx, :]  # shape: (num_envs, 3)
+    right_knee_pos = asset.data.body_pos_w[:, right_knee_idx, :]  # shape: (num_envs, 3)
+    
+    # Compute 3D distance between knees
+    knee_distance = torch.norm(left_knee_pos - right_knee_pos, dim=1)  # shape: (num_envs,)
+    
+    # Target distance is roughly shoulder width (around 0.3-0.4 m for humanoid)
+    # We want to penalize deviation from this natural stance width
+    target_knee_distance = 0.4  # meters
+    
+    # Compute error: distance from target
+    distance_error = knee_distance - target_knee_distance
+    
+    # Return negative squared error (so reward increases when knees maintain target distance)
+    return -torch.square(distance_error)
 
-    lin_vel = asset.data.root_lin_vel_w[:, :2]  # shape: (num_envs, 2)
-    vel_norm2 = torch.sum(lin_vel ** 2, dim=1)
-    reward = torch.exp(-float(scale) * vel_norm2)
 
-    return reward
- 
 def projectile_hit_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
-    projectile_name: str = "Projectile",
+    projectile_names: list | None = None,
     penalty: float = -10.0,
-    threshold: float = 0.5,
+    threshold: float = 0.3,
 ) -> torch.Tensor:
+    # robot base position
+    asset: Articulation = env.scene[asset_cfg.name]
+    base_pos = asset.data.body_pos_w[:, 0, :]
 
-    # Get robot
-    robot: Articulation = env.scene[asset_cfg.name]
-    robot_body_positions = robot.data.body_pos_w  # shape: (num_envs, num_bodies, 3)
+    # candidate projectile names
+    scene_names = list(env.scene.keys())
+    candidates = [] if projectile_names is None else list(projectile_names)
+    if projectile_names is None:
+        for n in scene_names:
+            if "projectile" in n.lower() or "obstacle" in n.lower():
+                candidates.append(n)
+
+    if len(candidates) == 0:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    min_dists = None
+    for name in candidates:
+        try:
+            obj = env.scene[name]
+            pos = obj.data.body_pos_w[:, 0, :]
+        except Exception:
+            continue
+        d = torch.norm(base_pos - pos, dim=1)
+        min_dists = d if min_dists is None else torch.minimum(min_dists, d)
+
+    if min_dists is None:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    hit = min_dists < float(threshold)
+    out = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    out[hit] = float(penalty)
+    return out
+
+
+def base_velocity_reward(
+    env: ManagerBasedRLEnv, 
+    asset_cfg: SceneEntityCfg, 
+    scale: float = 100.0
+) -> torch.Tensor:
+    """Reward for standing still (minimal base velocity).
     
-    # Get projectile
+    Penalizes linear and angular velocity of the robot base.
+    Higher scale = stronger penalty for movement.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    
+    # Get base velocities
+    lin_vel = torch.linalg.norm(asset.data.root_lin_vel_w, dim=1)  # (num_envs,)
+    ang_vel = torch.linalg.norm(asset.data.root_ang_vel_w, dim=1)  # (num_envs,)
+    
+    # Combined velocity penalty
+    velocity = lin_vel + 0.1 * ang_vel  # Weight angular velocity less
+    
+    # Return negative reward (penalize movement)
+    return -scale * velocity
+
+
+def projectile_proximity_penalty(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    projectile_name: str = "Projectile",
+    max_distance: float = 3.0,
+    penalty_scale: float = -30.0,
+) -> torch.Tensor:
+    """Penalty reward based on proximity to projectile.
+    
+    Increases penalty as projectile approaches robot (within max_distance).
+    Uses smooth falloff based on distance.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    
     try:
         projectile = env.scene[projectile_name]
-        proj_pos = projectile.data.root_pos_w  # shape: (num_envs, 3)
-    except (KeyError, AttributeError):
-        # Projectile not found, no penalty
+    except KeyError:
+        # Projectile not in scene, no penalty
         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
     
-    # Compute distance from projectile to each robot body
-    # proj_pos: (num_envs, 3) -> (num_envs, 1, 3)
-    # robot_body_positions: (num_envs, num_bodies, 3)
-    distances = torch.norm(
-        robot_body_positions - proj_pos.unsqueeze(1),
-        dim=-1
-    )
+    # Get positions
+    robot_pos = asset.data.root_pos_w  # (num_envs, 3)
+    projectile_pos = projectile.data.root_pos_w  # (num_envs, 3)
     
-    # Find minimum distance to any body for each environment
-    min_dist_per_env = distances.min(dim=1)[0]  # shape: (num_envs,)
+    # Distance to projectile
+    distance = torch.linalg.norm(projectile_pos - robot_pos, dim=1)  # (num_envs,)
     
-    # Apply penalty if within threshold
-    reward = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
-    hit = min_dist_per_env < float(threshold)
-    reward[hit] = float(penalty)
+    # Smooth penalty: increases as distance decreases
+    # At max_distance: penalty ≈ 0
+    # At distance 0: penalty = penalty_scale
+    within_range = distance < max_distance
+    penalty = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
     
-    return reward
+    # For targets within range: penalty = penalty_scale * (1 - distance/max_distance)
+    penalty[within_range] = penalty_scale * (1.0 - distance[within_range] / max_distance)
+    
+    return penalty

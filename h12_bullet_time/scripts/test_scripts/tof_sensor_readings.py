@@ -11,11 +11,18 @@ import numpy as np
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-# URDF path
-urdf_path = Path(__file__).parent.parent.parent / "source" / "h12_bullet_time" / "h12_bullet_time" / "assets" / "robots" / "gentact_descriptions" / "robots" / "h1-2" / "h1_2_torso_skin.urdf"
+# Launch Isaac Sim FIRST before importing anything from isaaclab
+from isaaclab.app import AppLauncher
+
+app_launcher = AppLauncher(headless=False)
+app = app_launcher.app
+
+# NOW we can import from h12_bullet_time (after app is launched)
+from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
+urdf_path = H12_CFG_HANDLESS.spawn.asset_path
 
 print(f"Loading URDF from: {urdf_path}")
-print(f"URDF exists: {urdf_path.exists()}")
+print(f"URDF exists: {Path(urdf_path).exists()}")
 
 # Parse URDF directly to extract sensor link definitions
 tree = ET.parse(str(urdf_path))

@@ -22,8 +22,8 @@ import argparse
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Demo on throwing sphere from random direction.")
-parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
+parser = argparse.ArgumentParser(description="Demo on spawning different objects in multiple environments.")
+parser.add_argument("--num_envs", type=int, default=512, help="Number of environments to spawn.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -36,17 +36,19 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import random
-import math
 
 from isaacsim.core.utils.stage import get_current_stage
 from pxr import Gf, Sdf
 
 import isaaclab.sim as sim_utils
-import torch
 from isaaclab.assets import (
+    Articulation,
+    ArticulationCfg,
     AssetBaseCfg,
     RigidObject,
     RigidObjectCfg,
+    RigidObjectCollection,
+    RigidObjectCollectionCfg,
 )
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationContext
@@ -56,6 +58,8 @@ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 ##
 # Pre-defined Configuration
 ##
+
+from isaaclab_assets.robots.anymal import ANYDRIVE_3_LSTM_ACTUATOR_CFG  # isort: skip
 
 
 ##
@@ -89,7 +93,7 @@ def randomize_shape_color(prim_path_expr: str):
 
 @configclass
 class MultiObjectSceneCfg(InteractiveSceneCfg):
-    """Configuration for a sphere-throwing demo."""
+    """Configuration for a multi-object scene."""
 
     # ground plane
     ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
@@ -99,19 +103,115 @@ class MultiObjectSceneCfg(InteractiveSceneCfg):
         prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
     )
 
-    # spheres to throw at center
-    sphere: RigidObjectCfg = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/Sphere",
-        spawn=sim_utils.SphereCfg(
-            radius=0.15,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0), metallic=0.2),
+    # rigid object
+    object: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/Object",
+        spawn=sim_utils.MultiAssetSpawnerCfg(
+            assets_cfg=[
+                sim_utils.ConeCfg(
+                    radius=0.3,
+                    height=0.6,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0), metallic=0.2),
+                ),
+                sim_utils.CuboidCfg(
+                    size=(0.3, 0.3, 0.3),
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=0.2),
+                ),
+                sim_utils.SphereCfg(
+                    radius=0.3,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0), metallic=0.2),
+                ),
+            ],
+            random_choice=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=4, solver_velocity_iteration_count=0
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.5),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 2.0)),
+    )
+
+    # object collection
+    object_collection: RigidObjectCollectionCfg = RigidObjectCollectionCfg(
+        rigid_objects={
+            "object_A": RigidObjectCfg(
+                prim_path="/World/envs/env_.*/Object_A",
+                spawn=sim_utils.SphereCfg(
+                    radius=0.1,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=0.2),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        solver_position_iteration_count=4, solver_velocity_iteration_count=0
+                    ),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.5, 2.0)),
+            ),
+            "object_B": RigidObjectCfg(
+                prim_path="/World/envs/env_.*/Object_B",
+                spawn=sim_utils.CuboidCfg(
+                    size=(0.1, 0.1, 0.1),
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=0.2),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        solver_position_iteration_count=4, solver_velocity_iteration_count=0
+                    ),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.5, 2.0)),
+            ),
+            "object_C": RigidObjectCfg(
+                prim_path="/World/envs/env_.*/Object_C",
+                spawn=sim_utils.ConeCfg(
+                    radius=0.1,
+                    height=0.3,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), metallic=0.2),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        solver_position_iteration_count=4, solver_velocity_iteration_count=0
+                    ),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(pos=(0.5, 0.0, 2.0)),
+            ),
+        }
+    )
+
+    # articulation
+    robot: ArticulationCfg = ArticulationCfg(
+        prim_path="/World/envs/env_.*/Robot",
+        spawn=sim_utils.MultiUsdFileCfg(
+            usd_path=[
+                f"{ISAACLAB_NUCLEUS_DIR}/Robots/ANYbotics/ANYmal-C/anymal_c.usd",
+                f"{ISAACLAB_NUCLEUS_DIR}/Robots/ANYbotics/ANYmal-D/anymal_d.usd",
+            ],
+            random_choice=True,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                retain_accelerations=False,
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=1000.0,
+                max_depenetration_velocity=1.0,
+            ),
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=True, solver_position_iteration_count=4, solver_velocity_iteration_count=0
+            ),
+            activate_contact_sensors=True,
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.6),
+            joint_pos={
+                ".*HAA": 0.0,  # all HAA
+                ".*F_HFE": 0.4,  # both front HFE
+                ".*H_HFE": -0.4,  # both hind HFE
+                ".*F_KFE": -0.8,  # both front KFE
+                ".*H_KFE": 0.8,  # both hind KFE
+            },
+        ),
+        actuators={"legs": ANYDRIVE_3_LSTM_ACTUATOR_CFG},
     )
 
 
@@ -123,50 +223,45 @@ class MultiObjectSceneCfg(InteractiveSceneCfg):
 def run_simulator(sim: SimulationContext, scene: InteractiveScene):
     """Runs the simulation loop."""
     # Extract scene entities
-    sphere: RigidObject = scene["sphere"]
-    
+    # note: we only do this here for readability.
+    rigid_object: RigidObject = scene["object"]
+    rigid_object_collection: RigidObjectCollection = scene["object_collection"]
+    robot: Articulation = scene["robot"]
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
     count = 0
-    num_envs = sphere.data.root_pos_w.shape[0]
-    center = torch.tensor([0.0, 0.0, 0.5], device=sim.device)  # Target center position at ground level
-    spawn_height = 3.0  # Height from which to throw (3 meters)
-    area_size = 5.0  # 5x5 meter area
-    
     # Simulation loop
     while simulation_app.is_running():
-        # Reset every 250 steps
+        # Reset
         if count % 250 == 0:
             # reset counter
             count = 0
-            
-            # Throw sphere from random position within 5x5 meter area towards center
-            root_state = sphere.data.default_root_state.clone()
-            
-            for env_idx in range(num_envs):
-                # Randomly pick position within 5x5 meter area around center
-                spawn_x = center[0] - area_size / 2.0 + random.random() * area_size
-                spawn_y = center[1] - area_size / 2.0 + random.random() * area_size
-                spawn_z = center[2] + spawn_height  # 3 meters above center
-                
-                # Position
-                root_state[env_idx, 0:3] = torch.tensor([spawn_x, spawn_y, spawn_z], device=sim.device)
-                
-                # Velocity towards center
-                spawn_pos = torch.tensor([spawn_x, spawn_y, spawn_z], device=sim.device)
-                direction = center - spawn_pos
-                direction = direction / (torch.norm(direction) + 1e-6)
-                # Apply velocity towards center
-                root_state[env_idx, 7:10] = direction * 5.0  # Velocity magnitude towards center
-            
+            # reset the scene entities
+            # object
+            root_state = rigid_object.data.default_root_state.clone()
             root_state[:, :3] += scene.env_origins
-            sphere.write_root_pose_to_sim(root_state[:, :7])
-            sphere.write_root_velocity_to_sim(root_state[:, 7:])
-            
+            rigid_object.write_root_pose_to_sim(root_state[:, :7])
+            rigid_object.write_root_velocity_to_sim(root_state[:, 7:])
+            # object collection
+            object_state = rigid_object_collection.data.default_object_state.clone()
+            object_state[..., :3] += scene.env_origins.unsqueeze(1)
+            rigid_object_collection.write_object_link_pose_to_sim(object_state[..., :7])
+            rigid_object_collection.write_object_com_velocity_to_sim(object_state[..., 7:])
+            # robot
+            # -- root state
+            root_state = robot.data.default_root_state.clone()
+            root_state[:, :3] += scene.env_origins
+            robot.write_root_pose_to_sim(root_state[:, :7])
+            robot.write_root_velocity_to_sim(root_state[:, 7:])
+            # -- joint state
+            joint_pos, joint_vel = robot.data.default_joint_pos.clone(), robot.data.default_joint_vel.clone()
+            robot.write_joint_state_to_sim(joint_pos, joint_vel)
             # clear internal buffers
             scene.reset()
-            print(f"[INFO]: Reset! Throwing sphere from random position (3m height) within 5x5m area towards center!")
+            print("[INFO]: Resetting scene state...")
 
+        # Apply action to robot
+        robot.set_joint_position_target(robot.data.default_joint_pos)
         # Write data to sim
         scene.write_data_to_sim()
         # Perform step
@@ -191,8 +286,10 @@ def main():
         scene = InteractiveScene(scene_cfg)
 
     with Timer("[INFO] Time to randomize scene: "):
-        # Randomization for spheres
-        randomize_shape_color(scene_cfg.sphere.prim_path)
+        # DO YOUR OWN OTHER KIND OF RANDOMIZATION HERE!
+        # Note: Just need to acquire the right attribute about the property you want to set
+        # Here is an example on setting color randomly
+        randomize_shape_color(scene_cfg.object.prim_path)
 
     # Play the simulator
     sim.reset()
