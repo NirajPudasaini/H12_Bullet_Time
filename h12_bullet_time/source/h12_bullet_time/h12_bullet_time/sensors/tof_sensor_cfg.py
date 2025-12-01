@@ -81,15 +81,18 @@ class TofSensorCfg(FrameTransformerCfg):
     max_range: float = 4.0  # meters
     """Maximum detection range of the sensor in meters."""
 
-    # projectile_radius: float = 0.5  # meters
-    """Radius of the target projectile/sphere in meters."""
-
-    sensor_fov_radius: float = 0.05  # meters
+    projectile_radius: float = 0.05  # meters
     """Field of view radius (beam width) in meters.
     
     This defines the cylindrical beam width of the ToF sensor. A target is only detected
     if its perpendicular distance from the sensor's axis (XY plane in sensor frame) is 
     less than or equal to this radius.
+    """
+
+    fov_deg: float = 45.0
+    pixel_count: int = 8
+    """It is assumed that the sensor is a square with the number of pixels on each side.
+    The number of pixels is used to determine the angle of each pixel.
     """
 
     visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TofSensor")

@@ -306,6 +306,8 @@ class TofSensor(SensorBase):
         # when updating sensor in _update_buffers_impl
         duplicate_frame_indices = []
 
+        self.make_grid()
+
         # Go through each body name and determine the number of duplicates we need for that frame
         # and extract the offsets. This is all done to handle the case where multiple frames
         # reference the same body, but have different names and/or offsets
@@ -364,7 +366,8 @@ class TofSensor(SensorBase):
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), 3, device=self._device
         )
         self._data.tof_distances = torch.zeros(
-            self._num_envs, self._num_sensors, len(duplicate_frame_indices), dtype=torch.float32, device=self._device
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
+            dtype=torch.float32, device=self._device
         )
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
@@ -432,62 +435,50 @@ class TofSensor(SensorBase):
         normalized_distances = torch.linalg.norm(target_pos_sensor, dim=-1)
 
         ############### TOF simulation ###############
-
-        # Time of flight distance is the distance to the target sphere if the sphere is within the sensor line of sight.
-        # The sensor's forward direction is the local Z-axis, transformed by the sensor's orientation.
-        #
-        # Geometry:
-        #   - sensor_forward: unit vector in sensor's forward direction (Z-axis)
-        #   - target_pos_sensor: vector from sensor to target center
-        #   - dot_product (proj_z): projection of target onto sensor's forward axis (depth along Z)
-        #   - perpendicular_dist: distance from sensor axis in XY plane (radial distance)
-        #
-        # Detection condition: target is detected if:
-        #   1. proj_z > 0 (target is in front of sensor)
-        #   2. perpendicular_dist <= sensor_fov_radius (target is within beam width)
-        #   3. distance <= max_range
-
-        # Get sensor forward directions (unit vectors): (S, 3)
-        sensor_forward = self._quat_rotate_vec(
-            self._relative_sensor_quat, 
-            torch.tensor([0.0, 0.0, 1.0], device=self.device)
-        )
+        # Multi-pixel ToF: each sensor has a pixel_count x pixel_count grid of rays
+        # Shapes: N=envs, S=sensors, M=targets, P=pixel_count^2
         
-        # Reshape for broadcasting with target_pos_sensor (N, S, M, 3)
-        # sensor_forward: (S, 3) -> (1, S, 1, 3)
-        sensor_forward_expanded = sensor_forward.view(1, self._num_sensors, 1, 3)
+        P = self.cfg.pixel_count ** 2
         
-        # Compute projection along sensor's forward axis (Z-component in sensor frame)
-        # This is the "depth" - how far along the sensor's line of sight the target is
-        # Shape: (N, S, M)
-        proj_z = torch.sum(sensor_forward_expanded * target_pos_sensor, dim=-1)
+        # Get base sensor forward directions: (S, 3)
+        z_axis = torch.tensor([0.0, 0.0, 1.0], device=self.device)
+        sensor_forward_base = self._quat_rotate_vec(self._relative_sensor_quat, z_axis)
         
-        # Compute the projection vector along the sensor axis
-        # Shape: (N, S, M, 3)
-        proj_vec = proj_z.unsqueeze(-1) * sensor_forward_expanded
+        # Apply grid rotations to get ray directions for each pixel: (S, P, 3)
+        # _grid_quats: (P, 4) -> broadcast with sensor_forward_base: (S, 1, 3)
+        sensor_forward_base_exp = sensor_forward_base.unsqueeze(1).expand(-1, P, -1)  # (S, P, 3)
+        grid_quats_exp = self._grid_quats.unsqueeze(0).expand(self._num_sensors, -1, -1)  # (S, P, 4)
+        ray_dirs = self._quat_rotate_vec(grid_quats_exp, sensor_forward_base_exp)  # (S, P, 3)
         
-        # Compute perpendicular component (XY plane distance from sensor axis)
-        # This is the radial distance from the sensor's beam centerline
-        # Shape: (N, S, M, 3)
-        perpendicular_vec = target_pos_sensor - proj_vec
+        # Expand target_pos_sensor for pixel dimension: (N, S, M, 3) -> (N, S, M, 1, 3)
+        target_pos_exp = target_pos_sensor.unsqueeze(-2)  # (N, S, M, 1, 3)
         
-        # Distance from sensor axis (perpendicular/radial distance)
-        # Shape: (N, S, M)
-        perpendicular_dist = torch.linalg.norm(perpendicular_vec, dim=-1)
+        # Expand ray_dirs for batch/target dims: (S, P, 3) -> (1, S, 1, P, 3)
+        ray_dirs_exp = ray_dirs.unsqueeze(0).unsqueeze(2)  # (1, S, 1, P, 3)
         
-        # Detection conditions:
-        # 1. Target is in front of sensor (proj_z > 0)
-        # 2. Target is within sensor's field of view radius
-        # 3. Target is within max range
+        # Projection of target onto each ray direction (depth along ray): (N, S, M, P)
+        proj_z = torch.sum(ray_dirs_exp * target_pos_exp, dim=-1)
+        
+        # Perpendicular distance from each ray axis: (N, S, M, P)
+        proj_vec = proj_z.unsqueeze(-1) * ray_dirs_exp  # (N, S, M, P, 3)
+        perpendicular_vec = target_pos_exp - proj_vec    # (N, S, M, P, 3)
+        perpendicular_dist = torch.linalg.norm(perpendicular_vec, dim=-1)  # (N, S, M, P)
+        
+        # Expand normalized_distances for pixel dimension: (N, S, M) -> (N, S, M, P)
+        sphere_offset = self.cfg.projectile_radius*torch.sin(torch.acos(perpendicular_dist/self.cfg.projectile_radius)) # offset = r*sin(theta), where theta = acos(perpendicular_dist/r)
+        normalized_distances_exp = normalized_distances.unsqueeze(-1).expand(-1, -1, -1, P)
+        final_distances = normalized_distances_exp - sphere_offset
+        
+        # Detection conditions per pixel
         in_front = proj_z > 0
-        within_fov = perpendicular_dist <= self.cfg.sensor_fov_radius
-        within_range = normalized_distances <= self.cfg.max_range
+        within_fov = perpendicular_dist <= self.cfg.projectile_radius
+        within_range = normalized_distances_exp <= self.cfg.max_range
         
-        # ToF distance is valid only if all conditions are met
+        # ToF distance per pixel: (N, S, M, P)
         tof_distances = torch.where(
-            in_front & within_fov & within_range, 
-            normalized_distances, 
-            torch.nan
+            in_front & within_fov & within_range,
+            final_distances,
+            torch.full_like(normalized_distances_exp, torch.nan)
         )
 
         ######################################################
@@ -505,6 +496,36 @@ class TofSensor(SensorBase):
         self._data.tof_distances[:] = tof_distances
 
 
+    def make_grid(self):
+        """Create quaternions representing ray directions for each pixel in the sensor grid.
+        
+        Output shape: (pixel_count^2, 4) - flattened grid of rotation quaternions.
+        Each quaternion rotates the center ray to a pixel's ray direction.
+        """
+        fov_angle = self.cfg.fov_deg * (torch.pi / 180.0)
+        half_fov = fov_angle / 2.0
+        P = self.cfg.pixel_count
+        
+        # Create grid of angles (X=yaw around Y-axis, Y=pitch around X-axis)
+        angles_x = torch.linspace(-half_fov, half_fov, P, device=self.device)
+        angles_y = torch.linspace(half_fov, -half_fov, P, device=self.device)
+        grid_X, grid_Y = torch.meshgrid(angles_x, angles_y, indexing='xy')
+        
+        # Flatten to (P^2,)
+        ax = grid_X.reshape(-1)
+        ay = grid_Y.reshape(-1)
+        
+        # Build rotation quaternions: yaw (around Y), then pitch (around X)
+        x_axis = torch.tensor([1.0, 0.0, 0.0], device=self.device).expand(P * P, -1)
+        y_axis = torch.tensor([0.0, 1.0, 0.0], device=self.device).expand(P * P, -1)
+        
+        quat_yaw = quat_from_angle_axis(ax, y_axis)    # (P^2, 4)
+        quat_pitch = quat_from_angle_axis(ay, x_axis)  # (P^2, 4)
+        
+        # Combined rotation: pitch after yaw -> q_pitch * q_yaw
+        self._grid_quats = self._quat_multiply(quat_pitch, quat_yaw)  # (P^2, 4)
+
+    
     def _set_debug_vis_impl(self, debug_vis: bool):
         # set visibility of markers
         # note: parent only deals with callbacks. not their visibility
@@ -519,54 +540,52 @@ class TofSensor(SensorBase):
                 self.frame_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        """Visualize sensor forward directions as lines (Z-axis)."""
+        """Visualize sensor ray directions as lines for each pixel in the grid."""
         
-        # Calculate sensor world positions
-        # source_pos_w: (N, 3) -> (N*S, 3)
-        source_pos_expanded = self._data.source_pos_w.repeat_interleave(self._num_sensors, dim=0)
-        source_quat_expanded = self._data.source_quat_w.repeat_interleave(self._num_sensors, dim=0)
+        N, S, P = self._num_envs, self._num_sensors, self.cfg.pixel_count ** 2
         
-        # relative_sensor_pos: (S, 3) -> (N*S, 3)
-        sensor_rel_pos_expanded = self._relative_sensor_pos.repeat(self._num_envs, 1)
-        # relative_sensor_quat: (S, 4) -> (N*S, 4)
-        sensor_rel_quat_expanded = self._relative_sensor_quat.repeat(self._num_envs, 1)
-
-        # Compute sensor world position and orientation
+        # Calculate sensor world positions and orientations: (N, S, 3/4)
+        source_pos = self._data.source_pos_w.unsqueeze(1)  # (N, 1, 3)
+        source_quat = self._data.source_quat_w.unsqueeze(1)  # (N, 1, 4)
+        sensor_rel_pos = self._relative_sensor_pos.unsqueeze(0)  # (1, S, 3)
+        sensor_rel_quat = self._relative_sensor_quat.unsqueeze(0)  # (1, S, 4)
+        
+        # Compute sensor world positions: (N, S, 3)
         sensor_pos_w, sensor_quat_w = combine_frame_transforms(
-            source_pos_expanded, source_quat_expanded, 
-            sensor_rel_pos_expanded, sensor_rel_quat_expanded
+            source_pos.expand(-1, S, -1).reshape(-1, 3),
+            source_quat.expand(-1, S, -1).reshape(-1, 4),
+            sensor_rel_pos.expand(N, -1, -1).reshape(-1, 3),
+            sensor_rel_quat.expand(N, -1, -1).reshape(-1, 4),
         )
+        sensor_pos_w = sensor_pos_w.view(N, S, 3)
+        sensor_quat_w = sensor_quat_w.view(N, S, 4)
         
-        # Calculate the end position of the direction line (along sensor's Z-axis)
-        # The line length represents the max detection range
-        line_length = self.cfg.max_range
+        # Get ray directions for each pixel in world frame
+        # Base forward direction scaled by max_range
+        forward_local = torch.tensor([0.0, 0.0, self.cfg.max_range], device=self.device)
         
-        # Forward direction in sensor local frame is Z-axis: [0, 0, 1]
-        forward_dir_local = torch.tensor([0.0, 0.0, line_length], device=self.device)
+        # Apply grid rotations to get local ray directions: (P, 3)
+        ray_dirs_local = self._quat_rotate_vec(self._grid_quats, forward_local)
         
-        # Rotate forward direction by sensor world orientation
-        sensor_forward_w = self._quat_rotate_vec(sensor_quat_w, forward_dir_local)  # (N*S, 3)
+        # Transform to world frame for each sensor: (N, S, P, 3)
+        # sensor_quat_w: (N, S, 4) -> (N, S, 1, 4)
+        sensor_quat_exp = sensor_quat_w.unsqueeze(2).expand(-1, -1, P, -1)  # (N, S, P, 4)
+        ray_dirs_local_exp = ray_dirs_local.unsqueeze(0).unsqueeze(0).expand(N, S, -1, -1)  # (N, S, P, 3)
+        ray_dirs_w = self._quat_rotate_vec(sensor_quat_exp, ray_dirs_local_exp)  # (N, S, P, 3)
         
-        # End position of the direction line
-        sensor_end_pos_w = sensor_pos_w + sensor_forward_w  # (N*S, 3)
+        # Compute start and end positions for all rays
+        sensor_pos_exp = sensor_pos_w.unsqueeze(2).expand(-1, -1, P, -1)  # (N, S, P, 3)
+        start_pos = sensor_pos_exp.reshape(-1, 3)  # (N*S*P, 3)
+        end_pos = (sensor_pos_exp + ray_dirs_w).reshape(-1, 3)  # (N*S*P, 3)
         
-        # Get line visualization (position at midpoint, orientation pointing along line)
-        lines_pos, lines_quat, lines_length = self._get_connecting_lines(
-            start_pos=sensor_pos_w,
-            end_pos=sensor_end_pos_w,
-        )
-
-        # Only show direction lines (no frame markers)
+        # Get line visualization
+        lines_pos, lines_quat, lines_length = self._get_connecting_lines(start_pos, end_pos)
+        
         num_lines = lines_pos.size(0)
-        
-        # Marker scales: lines use length as z-scale
         marker_scales = torch.ones(num_lines, 3, device=self.device)
-        marker_scales[:, 2] = lines_length  # z-scale for lines
-        
-        # Marker indices: all lines use marker config index 1
+        marker_scales[:, 2] = lines_length
         marker_indices = torch.ones(num_lines, device=self.device, dtype=torch.int32)
 
-        # Update the visualizer with only lines
         self.frame_visualizer.visualize(
             translations=lines_pos,
             orientations=lines_quat,
@@ -599,20 +618,33 @@ class TofSensor(SensorBase):
         Returns:
             Rotated vector(s). Shape (..., 3)
         """
-        # Extract quaternion components
         w = quat[..., 0:1]
         xyz = quat[..., 1:4]
         
-        # If vec is a single vector, expand it
         if vec.dim() == 1:
             vec = vec.expand(quat.shape[:-1] + (3,))
         
-        # Quaternion rotation: v' = v + 2*w*(xyz × v) + 2*(xyz × (xyz × v))
-        # Using the formula: v' = q * v * q_conjugate
         t = 2.0 * torch.linalg.cross(xyz, vec)
-        rotated = vec + w * t + torch.linalg.cross(xyz, t)
+        return vec + w * t + torch.linalg.cross(xyz, t)
+
+    def _quat_multiply(self, q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+        """Multiply two quaternions (wxyz format): q1 * q2.
         
-        return rotated
+        Args:
+            q1, q2: Quaternions in (w, x, y, z) format. Shape (..., 4)
+            
+        Returns:
+            Product quaternion. Shape (..., 4)
+        """
+        w1, x1, y1, z1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
+        w2, x2, y2, z2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
+        
+        return torch.stack([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2,
+        ], dim=-1)
 
     def _get_connecting_lines(
         self, start_pos: torch.Tensor, end_pos: torch.Tensor

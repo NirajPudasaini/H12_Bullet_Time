@@ -42,6 +42,68 @@ from h12_bullet_time.sensors.tof_sensor_cfg import TofSensorCfg
 
 
 # ------------------------------------------------------------------------------
+# ASCII visualization helpers
+# ------------------------------------------------------------------------------
+
+def print_tof_ascii_grid(tof_distances: np.ndarray, pixel_count: int, max_range: float, grids_per_row: int = 10):
+    """Print ToF distance data as compact ASCII art grids arranged horizontally.
+    
+    Args:
+        tof_distances: Array of shape (N, S, M, P) where P = pixel_count^2
+        pixel_count: Number of pixels per side (e.g., 8 for 8x8 grid)
+        max_range: Maximum sensor range for normalization
+        grids_per_row: Number of grids to display per row (default 10)
+    """
+    CHARS = " ·░▒▓█"
+    N_CHARS = len(CHARS) - 1
+    
+    n_envs, n_sensors, n_targets, n_pixels = tof_distances.shape
+    content_width = pixel_count * 2  # "X X X X " for each row
+    grid_width = content_width + 2   # +2 for │ borders
+    
+    def build_grid_lines(sensor_idx: int, grid: np.ndarray) -> list[str]:
+        """Build ASCII lines for a single sensor grid."""
+        lines = []
+        # Header with sensor index (padded to grid width)
+        header = f"S{sensor_idx}".center(grid_width)
+        lines.append(header)
+        lines.append("┌" + "─" * content_width + "┐")
+        
+        for row in range(pixel_count):
+            row_chars = []
+            for col in range(pixel_count):
+                val = grid[row, col]
+                if np.isnan(val):
+                    row_chars.append(" ")
+                else:
+                    normalized = 1.0 - np.clip(val / max_range, 0, 1)
+                    char_idx = min(int(normalized * N_CHARS), N_CHARS - 1)
+                    row_chars.append(CHARS[char_idx + 1])
+            lines.append("│" + "".join(f"{c} " for c in row_chars) + "│")
+        
+        lines.append("└" + "─" * content_width + "┘")
+        return lines
+    
+    for env_idx in range(n_envs):
+        # Build all grids for this environment
+        all_grids = []
+        for sensor_idx in range(n_sensors):
+            pixel_data = tof_distances[env_idx, sensor_idx]  # (M, P)
+            min_dists = np.nanmin(pixel_data, axis=0)  # (P,)
+            grid = min_dists.reshape(pixel_count, pixel_count)
+            all_grids.append(build_grid_lines(sensor_idx, grid))
+        
+        # Print grids in rows of grids_per_row
+        for row_start in range(0, n_sensors, grids_per_row):
+            row_grids = all_grids[row_start:row_start + grids_per_row]
+            n_lines = len(row_grids[0])
+            
+            for line_idx in range(n_lines):
+                print(" ".join(g[line_idx] for g in row_grids))
+            print()  # Blank line between rows
+
+
+# ------------------------------------------------------------------------------
 # Scene configuration
 # ------------------------------------------------------------------------------
 
@@ -91,57 +153,57 @@ def create_scene_config():
     
     # Dynamically add sensor configs as class attributes
     sensor_names = []
-    # for idx, (link_path, sensor_poses) in enumerate(sensor_library.items()):
-    #     # Create a valid sensor name (replace problematic characters)
-    #     sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
-    #     sensor_names.append(sensor_name)
+    for idx, (link_path, sensor_poses) in enumerate(sensor_library.items()):
+        # Create a valid sensor name (replace problematic characters)
+        sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
+        sensor_names.append(sensor_name)
         
-    #     # Extract positions and orientations from Pose3D objects
-    #     sensor_positions = [pose.pos for pose in sensor_poses]
-    #     sensor_orientations = [pose.quat for pose in sensor_poses]
+        # Extract positions and orientations from Pose3D objects
+        sensor_positions = [pose.pos for pose in sensor_poses]
+        sensor_orientations = [pose.quat for pose in sensor_poses]
         
-    #     # Create the sensor config
-    #     sensor_cfg = TofSensorCfg(
-    #         prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
-    #         target_frames=[
-    #             TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
-    #         ],
-    #         relative_sensor_pos=sensor_positions,
-    #         relative_sensor_quat=sensor_orientations,  # Pass orientations
-    #         debug_vis=True,
-    #         max_range=4.0,  # meters
-    #         projectile_radius=projectile_radius,
-    #     )
+        # Create the sensor config
+        sensor_cfg = TofSensorCfg(
+            prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
+            target_frames=[
+                TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
+            ],
+            relative_sensor_pos=sensor_positions,
+            relative_sensor_quat=sensor_orientations,  # Pass orientations
+            debug_vis=False,
+            max_range=4.0,  # meters
+            projectile_radius=projectile_radius,
+        )
         
-    #     # Add it as a class attribute
-    #     setattr(TofSensorSceneCfg, sensor_name, sensor_cfg)
+        # Add it as a class attribute
+        setattr(TofSensorSceneCfg, sensor_name, sensor_cfg)
 
     # Debug with a single sensor
-    for idx, (link_path, sensor_poses) in enumerate(sensor_library.items()):
-        if idx == 0:
-            # Create a valid sensor name (replace problematic characters)
-            sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
-            sensor_names.append(sensor_name)
+    # for idx, (link_path, sensor_poses) in enumerate(sensor_library.items()):
+    #     if idx == 0:
+    #         # Create a valid sensor name (replace problematic characters)
+    #         sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
+    #         sensor_names.append(sensor_name)
             
-            # Extract positions and orientations from Pose3D objects
-            sensor_positions = [pose.pos for pose in sensor_poses]
-            sensor_orientations = [pose.quat for pose in sensor_poses]
+    #         # Extract positions and orientations from Pose3D objects
+    #         sensor_positions = [pose.pos for pose in sensor_poses]
+    #         sensor_orientations = [pose.quat for pose in sensor_poses]
             
-            # Create the sensor config
-            sensor_cfg = TofSensorCfg(
-                prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
-                target_frames=[
-                    TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
-                ],
-                relative_sensor_pos=sensor_positions,
-                relative_sensor_quat=sensor_orientations,  # Pass orientations
-                debug_vis=True,
-                max_range=4.0,  # meters
-                sensor_fov_radius=projectile_radius,
-            )
+    #         # Create the sensor config
+    #         sensor_cfg = TofSensorCfg(
+    #             prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
+    #             target_frames=[
+    #                 TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
+    #             ],
+    #             relative_sensor_pos=sensor_positions,
+    #             relative_sensor_quat=sensor_orientations,  # Pass orientations
+    #             debug_vis=True,
+    #             max_range=4.0,  # meters
+    #             projectile_radius=projectile_radius,
+    #         )
             
-            # Add it as a class attribute
-            setattr(TofSensorSceneCfg, sensor_name, sensor_cfg)
+    #         # Add it as a class attribute
+    #         setattr(TofSensorSceneCfg, sensor_name, sensor_cfg)
 
     # Return both the config class and the sensor names list
     return TofSensorSceneCfg, sensor_names
@@ -216,12 +278,10 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, sen
                 
                 print(f"{display_name:<35} {num_sensors:<12} {num_detections:<12} {avg_tof_distance:<12.4f} {tof_distances_error:<12.4f}")
                 
-                # Print full ToF distance values if debug mode is enabled
+                # Print ToF grids as ASCII art if debug mode is enabled
                 if debug:
-                    # Flatten the array and format each value to 2 decimal places
-                    tof_flat = tof_distances.flatten()
-                    tof_values_str = ", ".join([f"{v:.2f}" for v in tof_flat])
-                    print(f"  ToF values: [{tof_values_str}]")
+                    print_tof_ascii_grid(tof_distances, scene[sensor_name].cfg.pixel_count, 
+                                        scene[sensor_name].cfg.max_range)
             
             print("="*120 + "\n")
             
