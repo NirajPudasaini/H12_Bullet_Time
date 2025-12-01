@@ -145,4 +145,3 @@ def launch_projectile_curriculum(
 #         except (IndexError, RuntimeError):
 #             # If action tensor shape is different, silently skip
 #             pass
-

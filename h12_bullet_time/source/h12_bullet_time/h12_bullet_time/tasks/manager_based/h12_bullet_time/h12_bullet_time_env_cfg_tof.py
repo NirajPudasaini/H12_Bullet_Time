@@ -4,12 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Curriculum Learning Configuration for H12 Bullet Time
-
-Phase 1 (Steps 0-500K): Stand/Balance only (v0)
-Phase 2 (Steps 500K+): Introduce projectiles + dodging (v1)
-
-This config starts easy and gradually introduces difficulty.
+to add TOF sensor readings to curriculum phase.py script
 """
 
 import math
@@ -26,18 +21,19 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
-
-
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
-
 from isaaclab.envs import mdp 
+
 from . import mdp as local_mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 
-@configclass
-class H12BulletTimeSceneCfg_Curriculum_Phase(InteractiveSceneCfg):
-    """Configuration for H12 Bullet Time curriculum scene with optional projectiles."""
 
+_projectile_radius = 0.075
+
+
+@configclass
+class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
+    """Configuration for H12 Bullet Time with TOF sensors."""
     # ground plane
     ground = AssetBaseCfg(
         prim_path="/World/ground",
@@ -92,32 +88,32 @@ class ActionsCfg:
             "left_hip_yaw_joint",
             "left_hip_roll_joint",
             "left_hip_pitch_joint",
-            "left_knee_joint",        #6      
-            "left_ankle_pitch_joint", #0
-            "left_ankle_roll_joint",  #1
+            "left_knee_joint",        
+            "left_ankle_pitch_joint",
+            "left_ankle_roll_joint",
 
             # Right leg
-            "right_hip_yaw_joint",   #5
-            "right_hip_roll_joint",  #4
-            "right_hip_pitch_joint", #3
+            "right_hip_yaw_joint",
+            "right_hip_roll_joint",
+            "right_hip_pitch_joint",
             "right_knee_joint",
             "right_ankle_pitch_joint",
             "right_ankle_roll_joint",
 
-            #torso
+            # torso
             "torso_joint",
 
-            #Left arm
-            "left_shoulder_pitch_joint", #7
-            "left_shoulder_roll_joint",  #8
-            "left_elbow_joint",   #2
+            # Left arm
+            "left_shoulder_pitch_joint",
+            "left_shoulder_roll_joint",
+            "left_elbow_joint",
 
             # Right arm
             "right_shoulder_pitch_joint",   
             "right_shoulder_roll_joint",   
             "right_elbow_joint",
         ],
-        scale= 0.25,  
+        scale=0.25,  
     )
 
 
@@ -127,26 +123,33 @@ class ObservationsCfg:
 
     @configclass
     class PolicyCfg(ObsGroup):
-        """Observations for policy group."""
+        """Observations for policy group (actor)."""
 
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         last_action = ObsTerm(func=mdp.last_action)
         
-        # Projectile observations (external sensing) - policy needs these to dodge!
-        projectile_pos_rel = ObsTerm(
-            func=local_mdp.projectile_position_relative,
-            scale=0.25,
-        )
-        projectile_vel = ObsTerm(
-            func=local_mdp.projectile_velocity,
-            scale=0.1,
-        )
-        projectile_dist = ObsTerm(
-            func=local_mdp.projectile_distance_obs,
-            scale=0.5,
+        # # Projectile observations
+        # projectile_pos_rel = ObsTerm(
+        #     func=local_mdp.projectile_position_relative,
+        #     scale=0.25,
+        # )
+        # projectile_vel = ObsTerm(
+        #     func=local_mdp.projectile_velocity,
+        #     scale=0.1,
+        # )
+        # projectile_dist = ObsTerm(
+        #     func=local_mdp.projectile_distance_obs,
+        #     scale=0.5,
+        # )
+        
+        # TOF sensor readings: distance measurements from each sensor
+        tof_distances = ObsTerm(
+            func=local_mdp.tof_distances_obs,
+            scale=0.25,  # Normalize to [0, 1] approximately (max_range=4.0)
+            params={"max_range": 4.0},
         )
         
         def __post_init__(self) -> None:
@@ -157,9 +160,9 @@ class ObservationsCfg:
     
     @configclass
     class CriticCfg(ObsGroup):
-        """Observations for critic group - includes privileged base velocity + projectile info (Phase 2)."""
+        """Observations for critic group (value function, privileged access)."""
         
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
@@ -168,7 +171,7 @@ class ObservationsCfg:
         # Privileged info: linear velocity
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
         
-        # Projectile observations (Phase 2: added for dodging task)
+        # Projectile observations
         projectile_pos_rel = ObsTerm(
             func=local_mdp.projectile_position_relative,
             scale=0.25,
@@ -180,6 +183,13 @@ class ObservationsCfg:
         projectile_dist = ObsTerm(
             func=local_mdp.projectile_distance_obs,
             scale=0.5,
+        )
+        
+        # TOF sensor readings (raw, no noise for better value estimation)
+        tof_distances_raw = ObsTerm(
+            func=local_mdp.tof_distances_obs,
+            scale=0.25,
+            params={"max_range": 4.0, "handle_nan": "replace_with_max"},
         )
         
         def __post_init__(self) -> None:
@@ -201,7 +211,7 @@ class RewardsCfg:
 
     alive_bonus = RewTerm(
         func=local_mdp.alive_bonus,
-        weight= 5.0,
+        weight=5.0,
         params={},
     )
 
@@ -210,35 +220,23 @@ class RewardsCfg:
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.005)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
 
-    # Standing still reward (light)
+    # Standing still reward
     base_velocity_reward = RewTerm(
         func=local_mdp.base_velocity_reward,
         weight=10,
         params={"asset_cfg": SceneEntityCfg("robot"), "scale": 100.0},
     )
 
-    # # Encourage torso pitching so the robot can dodge by bending its torso.
-    # torso_pitch = RewTerm(
-    #     func=local_mdp.torso_pitch_reward,
-    #     weight=3.0,
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot"),
-    #         "torso_link_name": "torso_link",
-    #         "max_pitch": 0.8,
-    #         "scale": 5.0,
-    #     },
-    # )
-
-    # Phase 2 reward (controlled by curriculum manager, see CurriculumCfg below)
-    # Starts at weight=0.0 (Phase 1), automatically set to 1.0 at step 500K (Phase 2)
+    # Phase 2 reward: Projectile avoidance penalty
+    # Starts at weight=0.0, transitions to 1.0 at curriculum milestone
     projectile_penalty = RewTerm(
         func=local_mdp.projectile_proximity_penalty,
-        weight=1.0,  # Active from start (no curriculum gating)
+        weight=1.0,
         params={
             "asset_cfg": SceneEntityCfg("robot"),
             "projectile_name": "Projectile",
             "max_distance": 3.0,
-            "penalty_scale": -30.0,  # Strong negative penalty when close
+            "penalty_scale": -30.0,
         },
     )
 
@@ -274,7 +272,7 @@ class EventCfg:
         },
     )
 
-    # Always launch projectiles on reset (no curriculum gating)
+    # Launch projectiles on reset
     launch_projectile = EventTerm(
         func=local_mdp.launch_projectile,
         mode="reset",
@@ -286,7 +284,7 @@ class EventCfg:
 
 @configclass
 class CurriculumCfg:
-    """No curriculum gating: projectile penalty active from start."""
+    """Curriculum manager configuration (empty: projectile penalty active from start)."""
     pass
 
 
@@ -303,21 +301,17 @@ class TerminationsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
     )
 
-    # Projectile hit termination disabled here to avoid premature episode
-    # termination. Use proximity penalties (see `projectile_penalty`) which
-    # now include an approach-velocity boost. If you want to re-enable a
-    # gated termination later, add a DoneTerm calling
-    # `local_mdp.projectile_hit_after_steps` with the desired `start_step`.
 
 ##
 # Environment configuration
 ##
 
-
 @configclass
-class H12BulletTimeEnvCfg_Curriculum_Phase(ManagerBasedRLEnvCfg):
+class H12BulletTimeEnvCfg_TOF(ManagerBasedRLEnvCfg):
+    """RL environment config with TOF sensor integration."""
+    
     # Scene settings
-    scene: H12BulletTimeSceneCfg_Curriculum_Phase = H12BulletTimeSceneCfg_Curriculum_Phase(num_envs=4096, env_spacing=4.0)
+    scene: H12BulletTimeSceneCfg_TOF = H12BulletTimeSceneCfg_TOF(num_envs=4096, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -333,7 +327,7 @@ class H12BulletTimeEnvCfg_Curriculum_Phase(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 5  # 5 second episodes (shorter rollouts -> more resets)
+        self.episode_length_s = 5  # 5 second episodes
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings

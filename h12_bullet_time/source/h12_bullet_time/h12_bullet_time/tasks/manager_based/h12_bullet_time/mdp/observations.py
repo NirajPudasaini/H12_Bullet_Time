@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import torch
-from typing import TYPE_CHECKING
+from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.managers import SceneEntityCfg
 
 # Import the real observation functions from Isaac Lab
 from isaaclab.envs.mdp import (
@@ -13,10 +14,6 @@ from isaaclab.envs.mdp import (
     last_action,
 )
 
-if TYPE_CHECKING:
-    from isaaclab.envs import ManagerBasedRLEnv
-    from isaaclab.managers import SceneEntityCfg
-
 __all__ = [
     "base_ang_vel",
     "joint_pos_rel",
@@ -26,85 +23,121 @@ __all__ = [
     "projectile_position_relative",
     "projectile_velocity",
     "projectile_distance_obs",
+    "tof_distances_obs",
 ]
 
 
-def projectile_position_relative(
-    env: ManagerBasedRLEnv,
-    projectile_name: str = "Projectile",
-    robot_link_name: str = "head",
-) -> torch.Tensor:
-
-    robot = env.scene["robot"]
-
-    # Determine robot link/world position to use
-    robot_pos = None
-    try:
-        body_names = list(robot.body_names)
-    except Exception:
-        body_names = []
-
-    if robot_link_name is not None and robot_link_name in body_names:
-        idx = body_names.index(robot_link_name)
-        # body_pos_w shape: (num_envs, num_bodies, 3)
-        robot_pos = robot.data.body_pos_w[:, idx, :]
-    else:
-        # Fallback to root_pos_w (num_envs, 3)
-        robot_pos = robot.data.root_pos_w
-
-    try:
-        projectile = env.scene[projectile_name]
-        proj_pos = projectile.data.root_pos_w  # (num_envs, 3)
-    except (KeyError, AttributeError):
-        # If projectile not found, return zeros
-        return torch.zeros((env.num_envs, 3), device=env.device, dtype=torch.float32)
-
-    # Relative position: projectile - robot_link
-    return proj_pos - robot_pos
-
-
-def projectile_velocity(
-    env: ManagerBasedRLEnv,
-    projectile_name: str = "Projectile",
-) -> torch.Tensor:
-    """Get projectile velocity in world frame.
-
-    Returns a (num_envs, 3) tensor. If the projectile is not present returns zeros.
+def projectile_position_relative(env: ManagerBasedRLEnv, projectile_name: str = "Projectile") -> torch.Tensor:
+    """Projectile position relative to base frame.
+    
+    Args:
+        env: Environment instance
+        projectile_name: Name of the projectile entity in the scene
+        
+    Returns:
+        Position of projectile relative to robot base (num_envs, 3)
     """
-    try:
-        projectile = env.scene[projectile_name]
-        return projectile.data.root_lin_vel_w  # (num_envs, 3)
-    except (KeyError, AttributeError):
-        # If projectile not found, return zeros
-        return torch.zeros((env.num_envs, 3), device=env.device, dtype=torch.float32)
+    projectile = env.scene[projectile_name]
+    base = env.scene["robot"]
+    
+    # Get projectile position in world frame
+    projectile_pos_world = projectile.data.root_pos_w  # (num_envs, 3)
+    base_pos_world = base.data.root_pos_w  # (num_envs, 3)
+    
+    # Get relative position
+    pos_rel = projectile_pos_world - base_pos_world
+    
+    return pos_rel
 
 
-def projectile_distance_obs(
-    env: ManagerBasedRLEnv,
-    projectile_name: str = "Projectile",
-    robot_link_name: str = "head",
-) -> torch.Tensor:
+def projectile_velocity(env: ManagerBasedRLEnv, projectile_name: str = "Projectile") -> torch.Tensor:
+    """Projectile velocity in world frame.
+    
+    Args:
+        env: Environment instance
+        projectile_name: Name of the projectile entity in the scene
+        
+    Returns:
+        Velocity of projectile (num_envs, 3)
+    """
+    projectile = env.scene[projectile_name]
+    return projectile.data.root_lin_vel_w  # (num_envs, 3)
 
-    robot = env.scene["robot"]
 
-    # Choose robot link position
-    try:
-        body_names = list(robot.body_names)
-    except Exception:
-        body_names = []
-
-    if robot_link_name is not None and robot_link_name in body_names:
-        idx = body_names.index(robot_link_name)
-        robot_pos = robot.data.body_pos_w[:, idx, :]
-    else:
-        robot_pos = robot.data.root_pos_w
-
-    try:
-        projectile = env.scene[projectile_name]
-        proj_pos = projectile.data.root_pos_w  # (num_envs, 3)
-    except (KeyError, AttributeError):
-        # If projectile not found, return zeros (no threat)
-        return torch.zeros((env.num_envs, 1), device=env.device, dtype=torch.float32)
-
-    distance = torch.norm(proj_pos - robot_pos, dim=-1, keepdim=True)
+def projectile_distance_obs(env: ManagerBasedRLEnv, projectile_name: str = "Projectile") -> torch.Tensor:
+    """Distance from base to projectile.
+    
+    Args:
+        env: Environment instance
+        projectile_name: Name of the projectile entity in the scene
+        
+    Returns:
+        Distance to projectile (num_envs, 1)
+    """
+    projectile = env.scene[projectile_name]
+    base = env.scene["robot"]
+    
+    projectile_pos = projectile.data.root_pos_w
+    base_pos = base.data.root_pos_w
+    
+    distance = torch.norm(projectile_pos - base_pos, dim=1, keepdim=True)
+    
     return distance
+
+
+def tof_distances_obs(
+    env: ManagerBasedRLEnv,
+    max_range: float = 4.0,
+    handle_nan: str = "replace_with_max",
+) -> torch.Tensor:
+    """TOF sensor distance readings aggregated across all sensors.
+    
+    Args:
+        env: Environment instance
+        max_range: Maximum range of TOF sensors (used for normalization)
+        handle_nan: How to handle NaN values:
+            - "replace_with_max": Replace NaN with max_range
+            - "zero": Replace NaN with 0
+            - "keep": Keep NaN values as-is
+        
+    Returns:
+        Flattened TOF sensor distances (num_envs, total_num_measurements)
+        Normalized by max_range so values are in [0, 1]
+    """
+    # Check if environment has sensors
+    if not hasattr(env.scene, "sensors") or len(env.scene.sensors) == 0:
+        # No sensors in scene, return empty tensor
+        num_envs = env.num_envs
+        return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+    
+    # Collect distances from all sensors
+    all_distances = []
+    
+    for sensor in env.scene.sensors:
+        # Try to get TOF distance data
+        if hasattr(sensor, "data") and hasattr(sensor.data, "distances"):
+            distances = sensor.data.distances  # Shape: (num_envs, num_frames, num_targets)
+            
+            # Flatten each sensor's measurements
+            distances_flat = distances.reshape(distances.shape[0], -1)  # (num_envs, flattened_dims)
+            all_distances.append(distances_flat)
+    
+    if not all_distances:
+        # No valid sensor data found, return empty tensor
+        num_envs = env.num_envs
+        return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+    
+    # Concatenate all sensor readings
+    tof_readings = torch.cat(all_distances, dim=1)  # (num_envs, total_dims)
+    
+    # Handle NaN values
+    if handle_nan == "replace_with_max":
+        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(max_range, device=env.device), tof_readings)
+    elif handle_nan == "zero":
+        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(0.0, device=env.device), tof_readings)
+    # else: keep as-is
+    
+    # Normalize by max_range
+    tof_normalized = tof_readings / max_range
+    
+    return tof_normalized

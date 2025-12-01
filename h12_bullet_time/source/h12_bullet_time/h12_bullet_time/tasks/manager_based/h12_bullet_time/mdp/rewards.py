@@ -14,7 +14,6 @@ __all__ = [
     "projectile_hit_penalty",
     "projectile_proximity_penalty",
     "projectile_distance",
-    "projectile_contact_penalty",
     "torso_pitch_curriculum",
     "torso_pitch_reward",
 ]
@@ -24,7 +23,6 @@ def alive_bonus(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     # Return constant reward per environment (batch)
     return torch.ones(env.num_envs, dtype=torch.float32, device=env.device)
-
 
 
 def base_height_l2(
@@ -187,7 +185,6 @@ def projectile_proximity_penalty(
         "right_elbow_link",
         "left_shoulder_yaw_link",
         "right_shoulder_yaw_link",
-        # Lidar mounted on torso (protect sensor)
         "lidar_link",
     ]
 
@@ -399,4 +396,3 @@ def torso_pitch_reward(
     reward = float(scale) * (abs_pitch / float(max_pitch))
 
     return reward.to(device=env.device)
-
