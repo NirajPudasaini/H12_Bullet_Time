@@ -1,0 +1,150 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/__init__.py
+	h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_cfg.py
+	h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_data.py
+	h12_bullet_time/source/h12_bullet_time/h12_bullet_time/utils/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-01_15-41-05/
+	outputs/2025-12-01/15-41-05/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+index 8d9ae3d..6290922 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+@@ -11,10 +11,10 @@ import torch
+ from collections.abc import Sequence
+ from typing import TYPE_CHECKING
+ 
+-from isaacsim.core.simulation_manager import SimulationManager
+ from pxr import UsdPhysics
+ 
+ import isaaclab.sim as sim_utils
++from isaaclab.sim import SimulationContext
+ import isaaclab.utils.string as string_utils
+ from isaaclab.markers import VisualizationMarkers
+ from isaaclab.utils.math import (
+@@ -232,8 +232,10 @@ class TofSensor(SensorBase):
+ 
+         body_names_regex = [tracked_prim_path.replace("env_0", "env_*") for tracked_prim_path in tracked_prim_paths]
+ 
+-        # obtain global simulation view
+-        self._physics_sim_view = SimulationManager.get_physics_sim_view()
++        # obtain global simulation view from context
++        from isaaclab.sim import SimulationContext
++        sim_context = SimulationContext.instance()
++        self._physics_sim_view = sim_context.physics_sim_view
+         # Create a prim view for all frames and initialize it
+         # order of transforms coming out of view will be source frame followed by target frame(s)
+         self._frame_physx_view = self._physics_sim_view.create_rigid_body_view(body_names_regex)
+@@ -657,4 +659,4 @@ class TofSensor(SensorBase):
+         angle = torch.acos(cos_angle)
+         orientations = quat_from_angle_axis(angle, rotation_axis)
+ 
+-        return positions, orientations, lengths
++        return positions, orientations, lengths
+\ No newline at end of file
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+index d29143e..2279d91 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+@@ -4,7 +4,7 @@
+ # SPDX-License-Identifier: BSD-3-Clause
+ 
+ """
+-to add TOF sensor readings to curriculum phase.py script
++Environment config with TOF sensor readings integrated for RL training.
+ """
+ 
+ import math
+@@ -26,11 +26,17 @@ from isaaclab.envs import mdp
+ 
+ from . import mdp as local_mdp
+ from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
++from h12_bullet_time.sensors.tof_sensor_cfg import TofSensorCfg
++from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
+ 
+ 
+ _projectile_radius = 0.075
+ 
+ 
++# Extract sensor poses from URDF
++_sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
++
++
+ @configclass
+ class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
+     """Configuration for H12 Bullet Time with TOF sensors."""
+@@ -73,6 +79,32 @@ class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
+         ),
+     )
+ 
++
++# Dynamically add TOF sensors to the scene config if sensors were found in URDF
++for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
++    # Create a valid sensor name
++    sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
++    
++    # Extract positions and orientations from Pose3D objects
++    sensor_positions = [pose.pos for pose in sensor_poses]
++    sensor_orientations = [pose.quat for pose in sensor_poses]
++    
++    # Create the sensor config and add it as a class attribute
++    sensor_cfg = TofSensorCfg(
++        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
++        target_frames=[
++            TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
++        ],
++        relative_sensor_pos=sensor_positions,
++        relative_sensor_quat=sensor_orientations,
++        debug_vis=False,
++        max_range=4.0,  # meters
++        sensor_fov_radius=_projectile_radius,
++    )
++    
++    # Add it as a class attribute
++    setattr(H12BulletTimeSceneCfg_TOF, sensor_name, sensor_cfg)
++
+ ##
+ # MDP settings
+ ##
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+index 870348e..7c9e587 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+@@ -90,20 +90,7 @@ def tof_distances_obs(
+     max_range: float = 4.0,
+     handle_nan: str = "replace_with_max",
+ ) -> torch.Tensor:
+-    """TOF sensor distance readings aggregated across all sensors.
+-    
+-    Args:
+-        env: Environment instance
+-        max_range: Maximum range of TOF sensors (used for normalization)
+-        handle_nan: How to handle NaN values:
+-            - "replace_with_max": Replace NaN with max_range
+-            - "zero": Replace NaN with 0
+-            - "keep": Keep NaN values as-is
+-        
+-    Returns:
+-        Flattened TOF sensor distances (num_envs, total_num_measurements)
+-        Normalized by max_range so values are in [0, 1]
+-    """
++
+     # Check if environment has sensors
+     if not hasattr(env.scene, "sensors") or len(env.scene.sensors) == 0:
+         # No sensors in scene, return empty tensor

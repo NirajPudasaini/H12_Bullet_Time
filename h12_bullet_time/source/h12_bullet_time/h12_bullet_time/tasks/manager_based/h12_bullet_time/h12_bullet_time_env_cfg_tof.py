@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-to add TOF sensor readings to curriculum phase.py script
+Environment config with TOF sensor readings integrated for RL training.
 """
 
 import math
@@ -26,9 +26,15 @@ from isaaclab.envs import mdp
 
 from . import mdp as local_mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
+from h12_bullet_time.sensors.tof_sensor_cfg import TofSensorCfg
+from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
 
 
 _projectile_radius = 0.075
+
+
+# Extract sensor poses from URDF
+_sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
 
 
 @configclass
@@ -72,6 +78,32 @@ class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
             ang_vel=(0.0, 0.0, 0.0),
         ),
     )
+
+
+# Dynamically add TOF sensors to the scene config if sensors were found in URDF
+for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
+    # Create a valid sensor name
+    sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
+    
+    # Extract positions and orientations from Pose3D objects
+    sensor_positions = [pose.pos for pose in sensor_poses]
+    sensor_orientations = [pose.quat for pose in sensor_poses]
+    
+    # Create the sensor config and add it as a class attribute
+    sensor_cfg = TofSensorCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
+        target_frames=[
+            TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
+        ],
+        relative_sensor_pos=sensor_positions,
+        relative_sensor_quat=sensor_orientations,
+        debug_vis=False,
+        max_range=4.0,  # meters
+        sensor_fov_radius=_projectile_radius,
+    )
+    
+    # Add it as a class attribute
+    setattr(H12BulletTimeSceneCfg_TOF, sensor_name, sensor_cfg)
 
 ##
 # MDP settings

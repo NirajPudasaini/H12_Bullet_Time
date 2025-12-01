@@ -90,20 +90,7 @@ def tof_distances_obs(
     max_range: float = 4.0,
     handle_nan: str = "replace_with_max",
 ) -> torch.Tensor:
-    """TOF sensor distance readings aggregated across all sensors.
-    
-    Args:
-        env: Environment instance
-        max_range: Maximum range of TOF sensors (used for normalization)
-        handle_nan: How to handle NaN values:
-            - "replace_with_max": Replace NaN with max_range
-            - "zero": Replace NaN with 0
-            - "keep": Keep NaN values as-is
-        
-    Returns:
-        Flattened TOF sensor distances (num_envs, total_num_measurements)
-        Normalized by max_range so values are in [0, 1]
-    """
+
     # Check if environment has sensors
     if not hasattr(env.scene, "sensors") or len(env.scene.sensors) == 0:
         # No sensors in scene, return empty tensor
