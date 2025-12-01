@@ -72,3 +72,6 @@ tests/
 
 # Docker history
 .isaac-lab-docker-history
+
+training_notes.txt
+logs

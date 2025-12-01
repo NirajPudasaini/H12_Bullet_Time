@@ -59,7 +59,7 @@ class H12BulletTimeSceneCfg_Curriculum(InteractiveSceneCfg):
         spawn=sim_utils.SphereCfg(
             radius=0.075,  
             visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.0, 0.0, 1.0),  # Blue
+                diffuse_color=(0.0, 0.0, 0.2),  # Blue
                 metallic=0.2,
             ),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -70,7 +70,7 @@ class H12BulletTimeSceneCfg_Curriculum(InteractiveSceneCfg):
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 1.0),
+            pos=(-1.0, -1.0, 0.0),
             rot=(1.0, 0.0, 0.0, 0.0),
             lin_vel=(0.0, 0.0, 0.0),
             ang_vel=(0.0, 0.0, 0.0),
@@ -135,6 +135,20 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         last_action = ObsTerm(func=mdp.last_action)
         
+        # Projectile observations (external sensing) - policy needs these to dodge!
+        projectile_pos_rel = ObsTerm(
+            func=local_mdp.projectile_position_relative,
+            scale=0.25,
+        )
+        projectile_vel = ObsTerm(
+            func=local_mdp.projectile_velocity,
+            scale=0.1,
+        )
+        projectile_dist = ObsTerm(
+            func=local_mdp.projectile_distance_obs,
+            scale=0.5,
+        )
+        
         def __post_init__(self) -> None:
             self.enable_corruption = True
             self.concatenate_terms = True
@@ -143,7 +157,7 @@ class ObservationsCfg:
     
     @configclass
     class CriticCfg(ObsGroup):
-        """Observations for critic group - includes privileged base velocity info."""
+        """Observations for critic group - includes privileged base velocity + projectile info (Phase 2)."""
         
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale = 0.2, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
@@ -153,6 +167,20 @@ class ObservationsCfg:
         
         # Privileged info: linear velocity
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
+        
+        # Projectile observations (Phase 2: added for dodging task)
+        projectile_pos_rel = ObsTerm(
+            func=local_mdp.projectile_position_relative,
+            scale=0.25,
+        )
+        projectile_vel = ObsTerm(
+            func=local_mdp.projectile_velocity,
+            scale=0.1,
+        )
+        projectile_dist = ObsTerm(
+            func=local_mdp.projectile_distance_obs,
+            scale=0.5,
+        )
         
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -166,8 +194,8 @@ class RewardsCfg:
 
     # Phase 1 rewards (always active): Stand and balance
     base_height = RewTerm(
-        func=mdp.base_height_l2,
-        weight= -10.0,
+        func=local_mdp.base_height_l2,
+        weight=10.0,
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
@@ -179,7 +207,7 @@ class RewardsCfg:
 
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.005)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
 
     # Standing still reward (light)
@@ -192,9 +220,14 @@ class RewardsCfg:
     # Phase 2 reward (controlled by curriculum manager, see CurriculumCfg below)
     # Starts at weight=0.0 (Phase 1), automatically set to 1.0 at step 500K (Phase 2)
     projectile_penalty = RewTerm(
-        func=local_mdp.projectile_hit_penalty,
-        weight=0.0,  # Initial: DISABLED in Phase 1, enabled in Phase 2 via curriculum manager
-        params={"asset_cfg": SceneEntityCfg("robot"), "projectile_name": "Projectile", "penalty": -10.0, "threshold": 0.5},
+        func=local_mdp.projectile_proximity_penalty,
+        weight=1.0,  # Active from start (no curriculum gating)
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "projectile_name": "Projectile",
+            "max_distance": 3.0,
+            "penalty_scale": -10.0,  # Strong negative penalty when close
+        },
     )
 
 
@@ -207,7 +240,7 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+            "pose_range": {"x": (-0.0, 0.0), "y": (-0.0, 0.0), "yaw": (0.0, 0.0)},
             "velocity_range": {
                 "x": (0.0, 0.0),
                 "y": (0.0, 0.0),
@@ -229,8 +262,7 @@ class EventCfg:
         },
     )
 
-    # Launch projectiles (activated after curriculum milestone at 700K steps)
-    # THIS MUST BE LAST so it runs after robot is reset!
+    # Always launch projectiles on reset (no curriculum gating)
     launch_projectile = EventTerm(
         func=local_mdp.launch_projectile,
         mode="reset",
@@ -242,16 +274,8 @@ class EventCfg:
 
 @configclass
 class CurriculumCfg:
-
-    # Curriculum milestone: At 500K steps, activate projectile penalty
-    projectile_penalty_curriculum = CurTerm(
-        func=local_mdp.modify_reward_weight,
-        params={
-            "term_name": "projectile_penalty",
-            "weight": 1.0,
-            "num_steps": 100,  
-        },
-    )
+    """No curriculum gating: projectile penalty active from start."""
+    pass
 
 
 @configclass
@@ -268,10 +292,10 @@ class TerminationsCfg:
     )
 
     # Projectile hit (phase 2 only, activated at milestone)
-    projectile_hit = DoneTerm(
-        func=local_mdp.projectile_hit,
-        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.5},
-    )
+    # NOTE: Disabled hard termination on projectile hit. Use distance-based
+    # rewards (`projectile_penalty`) instead so agent is punished softly
+    # when projectiles approach. If you want to re-enable termination, add a
+    # DoneTerm using `local_mdp.projectile_hit`.
 
 ##
 # Environment configuration
@@ -297,7 +321,7 @@ class H12BulletTimeEnvCfg_Curriculum(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 10  # 10 second episodes
+        self.episode_length_s = 5  # 5 second episodes (shorter rollouts -> more resets)
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings

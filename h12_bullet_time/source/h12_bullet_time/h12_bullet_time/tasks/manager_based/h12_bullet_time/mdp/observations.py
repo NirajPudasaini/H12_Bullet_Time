@@ -25,72 +25,86 @@ __all__ = [
     "last_action",
     "projectile_position_relative",
     "projectile_velocity",
-    "projectile_distance",
+    "projectile_distance_obs",
 ]
 
 
 def projectile_position_relative(
     env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg = None,
     projectile_name: str = "Projectile",
+    robot_link_name: str = "head",
 ) -> torch.Tensor:
-    """Get projectile position relative to robot base.
-    
-    Returns:
-        Tensor of shape (num_envs, 3) with projectile position relative to robot center.
-    """
+
     robot = env.scene["robot"]
-    robot_pos = robot.data.root_pos_w  # (num_envs, 3)
-    
+
+    # Determine robot link/world position to use
+    robot_pos = None
+    try:
+        body_names = list(robot.body_names)
+    except Exception:
+        body_names = []
+
+    if robot_link_name is not None and robot_link_name in body_names:
+        idx = body_names.index(robot_link_name)
+        # body_pos_w shape: (num_envs, num_bodies, 3)
+        robot_pos = robot.data.body_pos_w[:, idx, :]
+    else:
+        # Fallback to root_pos_w (num_envs, 3)
+        robot_pos = robot.data.root_pos_w
+
     try:
         projectile = env.scene[projectile_name]
         proj_pos = projectile.data.root_pos_w  # (num_envs, 3)
     except (KeyError, AttributeError):
         # If projectile not found, return zeros
         return torch.zeros((env.num_envs, 3), device=env.device, dtype=torch.float32)
-    
-    # Relative position: projectile - robot
-    rel_pos = proj_pos - robot_pos
-    return rel_pos
+
+    # Relative position: projectile - robot_link
+    return proj_pos - robot_pos
 
 
 def projectile_velocity(
     env: ManagerBasedRLEnv,
     projectile_name: str = "Projectile",
 ) -> torch.Tensor:
-    """Get projectile velocity.
-    
-    Returns:
-        Tensor of shape (num_envs, 3) with projectile linear velocity.
+    """Get projectile velocity in world frame.
+
+    Returns a (num_envs, 3) tensor. If the projectile is not present returns zeros.
     """
     try:
         projectile = env.scene[projectile_name]
-        proj_vel = projectile.data.root_lin_vel_w  # (num_envs, 3)
+        return projectile.data.root_lin_vel_w  # (num_envs, 3)
     except (KeyError, AttributeError):
         # If projectile not found, return zeros
         return torch.zeros((env.num_envs, 3), device=env.device, dtype=torch.float32)
-    
-    return proj_vel
 
 
-def projectile_distance(
+def projectile_distance_obs(
     env: ManagerBasedRLEnv,
     projectile_name: str = "Projectile",
+    robot_link_name: str = "head",
 ) -> torch.Tensor:
-    """Get distance from robot to projectile.
-    
-    Returns:
-        Tensor of shape (num_envs, 1) with distance to projectile.
-    """
+
     robot = env.scene["robot"]
-    robot_pos = robot.data.root_pos_w  # (num_envs, 3)
-    
+
+    # Choose robot link position
+    try:
+        body_names = list(robot.body_names)
+    except Exception:
+        body_names = []
+
+    if robot_link_name is not None and robot_link_name in body_names:
+        idx = body_names.index(robot_link_name)
+        robot_pos = robot.data.body_pos_w[:, idx, :]
+    else:
+        robot_pos = robot.data.root_pos_w
+
     try:
         projectile = env.scene[projectile_name]
         proj_pos = projectile.data.root_pos_w  # (num_envs, 3)
     except (KeyError, AttributeError):
-        # If projectile not found, return large distance
-        return torch.ones((env.num_envs, 1), device=env.device, dtype=torch.float32) * 100.0
-    
+        # If projectile not found, return zeros (no threat)
+        return torch.zeros((env.num_envs, 1), device=env.device, dtype=torch.float32)
+
     distance = torch.norm(proj_pos - robot_pos, dim=-1, keepdim=True)
     return distance

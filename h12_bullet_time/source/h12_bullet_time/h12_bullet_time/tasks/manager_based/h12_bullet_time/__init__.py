@@ -12,11 +12,34 @@ from . import agents
 ##
 
 
+
+gym.register(
+    id="Template-H12-Bullet-Time-Curriculum-Phase",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={    
+        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_curriculum_phase:H12BulletTimeEnvCfg_Curriculum_Phase",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+    },
+)   
+
+
+gym.register(
+    id="Template-H12-Bullet-Time-Curriculum-Phase-Play",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={    
+        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_curriculum_phase:H12BulletTimeEnvCfg_CurriculumPhasePlay",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
+    },
+)
+
+
 gym.register(
     id="Template-H12-Bullet-Time-Curriculum",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
-    kwargs={
+    kwargs={    
         "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_curriculum:H12BulletTimeEnvCfg_Curriculum",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
     },
@@ -33,13 +56,12 @@ gym.register(
     },
 )
 
-
 gym.register(
-    id="Template-H12-Bullet-Time-v1",
+    id="Template-H12-Bullet-Time-Minimal-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_v1:H12BulletTimeEnvCfg_v1",
+        "env_cfg_entry_point": f"{__name__}.h12_bullet_time_env_cfg_minimal:MinimalH12EnvCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:PPORunnerCfg",
     },
 )

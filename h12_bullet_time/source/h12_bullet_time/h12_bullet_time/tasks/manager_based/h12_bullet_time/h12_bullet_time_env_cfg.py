@@ -20,7 +20,7 @@ from isaaclab.utils import configclass
 
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-from isaaclab.envs import mdp 
+from isaaclab.envs import mdp
 from . import mdp as local_mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 # print(H12_CFG_HANDLESS.spawn.usd_path)
@@ -92,7 +92,7 @@ class ActionsCfg:
             "right_shoulder_roll_joint",   
             "right_elbow_joint",
         ],
-        scale= 0.25,  
+        scale= 0.25, # change this scaling to make it 
     )
 
 
@@ -114,7 +114,7 @@ class ObservationsCfg:
         
         def __post_init__(self) -> None:
             # self.history_length = 5
-            self.enable_corruption = True
+            self.enable_corruption = False
             self.concatenate_terms = True
 
     # observation groups
@@ -146,48 +146,26 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # Minimal reward: maintain base height at 1.04 m
+    # Gaussian reward for maintaining base height at target (1.04 m)
+    # Uses custom Gaussian function: exp(-5*error²) peaks at +1.0 at target height
     base_height = RewTerm(
-        func=mdp.base_height_l2,
-        weight= -10.0,
+        func=local_mdp.base_height_l2,
+        weight=10.0,
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
     # Alive bonus: reward for staying alive (not falling)
     alive_bonus = RewTerm(
         func=local_mdp.alive_bonus,
-        weight= 5.0,
+        weight=5.0,
         params={},
     )
 
+    # Additional stabilization rewards
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
-
-
-    # Reward for keeping horizontal base velocity near zero (encourages standing still)
-    base_velocity_reward = RewTerm(
-        func=local_mdp.base_velocity_reward,
-        weight=10.0,
-        params={"asset_cfg": SceneEntityCfg("robot"), "scale": 100.0},
-    )
-
-
-
-    # # Knee symmetry: encourage left and right knees to maintain similar angles
-    # knee_symmetry = RewTerm(
-    #     func=mdp.knee_symmetry,
-    #     weight= 0.2,
-    #     params={"asset_cfg": SceneEntityCfg("robot")},
-    # )
-
-    # # Penalty when projectile hits the robot (useful for simple dodge training)
-    # projectile_penalty = RewTerm(
-    #     func=mdp.projectile_hit_penalty,
-    #     weight=1.0,
-    #     params={"asset_cfg": SceneEntityCfg("robot"), "penalty": -10.0, "threshold": 0.25},
-    # )
 
 
 @configclass
@@ -256,7 +234,7 @@ class H12BulletTimeEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 10  # 10 second episodes
+        self.episode_length_s = 5  # Reduced from 10 to 5 seconds to prevent falling mid-episode
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings

@@ -1,4 +1,10 @@
 2025-11-11_11-29-40 - tried with projectile and all rewards initially commented out
 2025-11-11_11-29-40 - remove knee sym and base height rewards for testing
 2025-11-11_15-38-17 - failed combined phases !! 
-------------------------------
+------------------------------- HARD CURRICULUM----------------------------------------------
+2025-11-22_18-43-14 - ran curriculum py with hard Episode_Termination [mistakenly curr_step was 100k ! ]
+2025-11-22_19-19- ran curriculum py with hard Episode_Termination [mistakenly curr_step set to 2k ~ this was env steps unfortunately :(]
+2025-11-22_19-30- ran curriculum py with hard Episode_Termination [mistakenly curr_step set to 2k ~ this is training step now ! NOPE DIDNT WORK !]
+--------------------------------------SOFT CURRICULUM (to implement!)---------------------------------------
+Template-H12-Bullet-Time-Curriculum-Phase  - soft termination implementation 
+-----------------------------------------------------------------------------
