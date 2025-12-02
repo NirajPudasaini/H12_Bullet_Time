@@ -182,7 +182,13 @@ def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = No
         # Get the actual sensor object from the scene
         try:
             sensor = env.scene[sensor_name]
-            data = sensor.data
+            # IMPORTANT: Don't call sensor.data directly in multi-env setting
+            # Instead, access the internal data buffer safely
+            if not hasattr(sensor, "_data"):
+                print(f"  Sensor[{s_idx}] ({sensor_name}): no _data attribute")
+                continue
+            
+            data = sensor._data
         except Exception as e:
             print(f"  Sensor[{s_idx}] ({sensor_name}): failed to access data: {e}")
             continue
@@ -208,17 +214,16 @@ def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = No
                 arr = tof.cpu()
             else:
                 import numpy as _np
-
                 arr = _np.asarray(tof)
 
-            # arr expected shape: (num_envs, num_sensors, num_targets) or similar
+            # arr expected shape: (num_envs, num_sensors, num_targets, num_pixels)
             if hasattr(arr, "numpy"):
                 # torch tensor
                 vals = arr.numpy()
             else:
                 vals = arr
 
-            # Extract env slice
+            # Extract env slice safely
             if vals.ndim == 0:
                 print(f"  Sensor[{s_idx}] ({sensor_name}): scalar={vals}")
                 continue
@@ -227,6 +232,7 @@ def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = No
                 print(f"  Sensor[{s_idx}] ({sensor_name}): env index {env_idx} out of range (shape {vals.shape})")
                 continue
 
+            # Safely index the environment
             slice_env = vals[env_idx]
 
             # Flatten and compute stats

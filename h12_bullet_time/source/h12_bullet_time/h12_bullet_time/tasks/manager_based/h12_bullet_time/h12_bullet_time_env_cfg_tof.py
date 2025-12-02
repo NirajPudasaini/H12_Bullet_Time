@@ -36,6 +36,45 @@ _projectile_radius = 0.15
 # Extract sensor poses from URDF
 _sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
 
+# Debug: print how many sensors were found
+if not _sensor_library:
+    import warnings
+    warnings.warn(
+        f"[TOF CONFIG] No TOF sensors found in URDF at {H12_CFG_HANDLESS.spawn.asset_path}\n"
+        "Sensors will not be added to scene. Check URDF for TOF marker elements."
+    )
+else:
+    print(f"[TOF CONFIG] Found {len(_sensor_library)} sensor locations in URDF")
+    for link_path, poses in _sensor_library.items():
+        print(f"  - {link_path}: {len(poses)} sensor poses")
+
+
+# Build sensor configs dictionary BEFORE class definition so they can be added to the class
+_sensor_configs = {}
+for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
+    # Create a valid sensor name
+    sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
+    
+    # Extract positions and orientations from Pose3D objects
+    sensor_positions = [pose.pos for pose in sensor_poses]
+    sensor_orientations = [pose.quat for pose in sensor_poses]
+    
+    # Create the sensor config
+    sensor_cfg = TofSensorCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
+        target_frames=[
+            TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
+        ],
+        relative_sensor_pos=sensor_positions,
+        relative_sensor_quat=sensor_orientations,
+        debug_vis=False,
+        max_range=4.0,  # meters
+        projectile_radius=_projectile_radius,  # FOV radius matching projectile size
+    )
+    
+    _sensor_configs[sensor_name] = sensor_cfg
+    print(f"[TOF CONFIG] Added sensor: {sensor_name} with {len(sensor_poses)} measurement points")
+
 
 @configclass
 class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
@@ -80,30 +119,17 @@ class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
     )
 
 
-# Dynamically add TOF sensors to the scene config if sensors were found in URDF
-for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
-    # Create a valid sensor name
-    sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
-    
-    # Extract positions and orientations from Pose3D objects
-    sensor_positions = [pose.pos for pose in sensor_poses]
-    sensor_orientations = [pose.quat for pose in sensor_poses]
-    
-    # Create the sensor config and add it as a class attribute
-    sensor_cfg = TofSensorCfg(
-        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
-        target_frames=[
-            TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
-        ],
-        relative_sensor_pos=sensor_positions,
-        relative_sensor_quat=sensor_orientations,
-        debug_vis=False,
-        max_range=4.0,  # meters
-        projectile_radius=_projectile_radius,  # FOV radius matching projectile size
-    )
-    
-    # Add it as a class attribute
+# Now add all sensor configs as class attributes after class is defined
+print(f"[TOF CONFIG] Adding {len(_sensor_configs)} sensors to scene class...")
+for sensor_name, sensor_cfg in _sensor_configs.items():
     setattr(H12BulletTimeSceneCfg_TOF, sensor_name, sensor_cfg)
+    print(f"[TOF CONFIG] Successfully added: {sensor_name}")
+
+# Debug: verify sensors were actually added
+print(f"[TOF CONFIG] Scene class now has these attributes:")
+for attr_name in dir(H12BulletTimeSceneCfg_TOF):
+    if 'tof' in attr_name.lower() or 'sensor' in attr_name.lower():
+        print(f"  - {attr_name}")
 
 ##
 # MDP settings
@@ -163,25 +189,25 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         last_action = ObsTerm(func=mdp.last_action)
         
-        # # Projectile observations
-        # projectile_pos_rel = ObsTerm(
-        #     func=local_mdp.projectile_position_relative,
-        #     scale=0.25,
-        # )
-        # projectile_vel = ObsTerm(
-        #     func=local_mdp.projectile_velocity,
-        #     scale=0.1,
-        # )
-        # projectile_dist = ObsTerm(
-        #     func=local_mdp.projectile_distance_obs,
-        #     scale=0.5,
-        # )
+        # Projectile observations
+        projectile_pos_rel = ObsTerm(
+            func=local_mdp.projectile_position_relative,
+            scale=0.25,
+        )
+        projectile_vel = ObsTerm(
+            func=local_mdp.projectile_velocity,
+            scale=0.1,
+        )
+        projectile_dist = ObsTerm(
+            func=local_mdp.projectile_distance_obs,
+            scale=0.5,
+        )
         
         # TOF sensor readings: distance measurements from each sensor
         tof_distances = ObsTerm(
             func=local_mdp.tof_distances_obs,
             scale=0.25,  # Normalize to [0, 1] approximately (max_range=4.0)
-            params={"max_range": 4.0},
+            params={"max_range": 4.0, "handle_nan": "replace_with_max"},
         )
         
         def __post_init__(self) -> None:
@@ -313,12 +339,12 @@ class EventCfg:
         },
     )
 
-    # Debug: log TOF readings at reset to verify sensors
-    log_tof = EventTerm(
-        func=local_mdp.print_tof_readings,
-        mode="reset",
-        params={},
-    )
+    # Debug: log TOF readings at reset to verify sensors (DISABLED for multi-env compatibility)
+    # log_tof = EventTerm(
+    #     func=local_mdp.print_tof_readings,
+    #     mode="reset",
+    #     params={},
+    # )
 
 @configclass
 class CurriculumCfg:

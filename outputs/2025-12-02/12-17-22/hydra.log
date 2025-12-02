@@ -1,0 +1,7 @@
+[2025-12-02 12:17:31,545][h12_bullet_time.sensors.tof_sensor][INFO] - No offsets application needed from '/World/envs/env_.*/Robot/left_elbow_link' to target frames as all are identity: [None]
+[2025-12-02 12:17:32,402][h12_bullet_time.sensors.tof_sensor][INFO] - No offsets application needed from '/World/envs/env_.*/Robot/left_shoulder_roll_link' to target frames as all are identity: [None]
+[2025-12-02 12:17:33,205][h12_bullet_time.sensors.tof_sensor][INFO] - No offsets application needed from '/World/envs/env_.*/Robot/left_shoulder_yaw_link' to target frames as all are identity: [None]
+[2025-12-02 12:17:34,004][h12_bullet_time.sensors.tof_sensor][INFO] - No offsets application needed from '/World/envs/env_.*/Robot/right_elbow_link' to target frames as all are identity: [None]
+[2025-12-02 12:17:34,800][h12_bullet_time.sensors.tof_sensor][INFO] - No offsets application needed from '/World/envs/env_.*/Robot/right_shoulder_roll_link' to target frames as all are identity: [None]
+[2025-12-02 12:17:35,821][h12_bullet_time.sensors.tof_sensor][INFO] - No offsets application needed from '/World/envs/env_.*/Robot/right_shoulder_yaw_link' to target frames as all are identity: [None]
+[2025-12-02 12:17:36,622][h12_bullet_time.sensors.tof_sensor][INFO] - No offsets application needed from '/World/envs/env_.*/Robot/torso_link' to target frames as all are identity: [None]

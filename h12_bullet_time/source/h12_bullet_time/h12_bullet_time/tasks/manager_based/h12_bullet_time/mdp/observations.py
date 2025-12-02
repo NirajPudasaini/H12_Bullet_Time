@@ -92,73 +92,63 @@ def tof_distances_obs(
 ) -> torch.Tensor:
     """TOF sensor distance readings aggregated across all sensors.
     
-    Accesses sensor.data property which triggers automatic updates via SensorBase._update_outdated_buffers().
-    This is the standard IsaacLab pattern for lazy-evaluated sensor data.
-    
     Args:
         env: Environment instance
         max_range: Maximum range of TOF sensors (used for normalization)
-        handle_nan: How to handle NaN values:
-            - "replace_with_max": Replace NaN with max_range
-            - "zero": Replace NaN with 0
-            - "keep": Keep NaN values as-is
+        handle_nan: How to handle NaN values
         
     Returns:
         Flattened TOF sensor distances (num_envs, total_num_measurements)
         Normalized by max_range so values are in [0, 1]
     """
-    # Check if environment has sensors
-    if not hasattr(env.scene, "sensors") or len(env.scene.sensors) == 0:
-        # No sensors in scene, return empty tensor
-        num_envs = env.num_envs
-        return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+    from h12_bullet_time.sensors.tof_sensor import TofSensor
     
-    # Collect distances from all sensors
-    all_distances = []
+    num_envs = env.num_envs
+    all_sensor_data = []
     
-    # env.scene.sensors is a list of sensor names (strings)
-    for sensor_name in env.scene.sensors:
-        # Get the actual sensor object from the scene
-        try:
-            sensor = env.scene[sensor_name]
-            sensor_data = sensor.data
-            
-            # Try tof_distances first (preferred, includes FOV-based culling)
-            if hasattr(sensor_data, "tof_distances"):
-                distances = sensor_data.tof_distances  # Shape: (num_envs, num_sensors, num_targets)
-            # Fallback to raw_target_distances
-            elif hasattr(sensor_data, "raw_target_distances"):
-                distances = sensor_data.raw_target_distances
-            # Final fallback to distances attribute
-            elif hasattr(sensor_data, "distances"):
-                distances = sensor_data.distances
-            else:
-                # Skip this sensor if it has no distance data
-                continue
-            
-            # Flatten each sensor's measurements: (num_envs, num_sensors, num_targets) -> (num_envs, flattened)
-            distances_flat = distances.reshape(distances.shape[0], -1)  # (num_envs, flattened_dims)
-            all_distances.append(distances_flat)
-        except Exception:
-            # Skip sensors that fail to access data
-            continue
+    # Get sensors from env.scene._sensors dict (IsaacLab's official sensor registry)
+    if hasattr(env.scene, '_sensors') and isinstance(env.scene._sensors, dict):
+        for sensor_name, sensor_obj in env.scene._sensors.items():
+            # Check if this is a TofSensor
+            if isinstance(sensor_obj, TofSensor):
+                sensor_data = sensor_obj.data
+                
+                # Get distance measurements
+                if hasattr(sensor_data, "tof_distances"):
+                    distances = sensor_data.tof_distances
+                    
+                    # Flatten everything and reshape to (num_envs, features_per_env)
+                    all_flat = distances.reshape(-1)
+                    total_per_env = all_flat.numel() // num_envs
+                    
+                    # Reshape to (num_envs, features_per_env)
+                    flattened = all_flat.reshape(num_envs, total_per_env)
+                    all_sensor_data.append(flattened)
     
-    if not all_distances:
-        # No valid sensor data found, return empty tensor
-        num_envs = env.num_envs
+    # If no valid sensors found, return empty observation
+    if not all_sensor_data:
         return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
     
     # Concatenate all sensor readings
-    tof_readings = torch.cat(all_distances, dim=1)  # (num_envs, total_dims)
+    tof_readings = torch.cat(all_sensor_data, dim=1)
     
     # Handle NaN values
     if handle_nan == "replace_with_max":
-        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(max_range, device=env.device), tof_readings)
+        tof_readings = torch.nan_to_num(tof_readings, nan=max_range)
     elif handle_nan == "zero":
-        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(0.0, device=env.device), tof_readings)
-    # else: keep as-is
+        tof_readings = torch.nan_to_num(tof_readings, nan=0.0)
+    elif handle_nan == "mean":
+        # Replace NaN with mean of valid values per environment
+        valid_mask = ~torch.isnan(tof_readings)
+        for env_idx in range(num_envs):
+            valid = tof_readings[env_idx, valid_mask[env_idx]]
+            if valid.numel() > 0:
+                mean_val = valid.mean()
+            else:
+                mean_val = max_range
+            tof_readings[env_idx, ~valid_mask[env_idx]] = mean_val
     
-    # Normalize by max_range
-    tof_normalized = tof_readings / max_range
+    # Normalize to [0, 1]
+    tof_normalized = torch.clamp(tof_readings / max_range, min=0.0, max=1.0)
     
     return tof_normalized

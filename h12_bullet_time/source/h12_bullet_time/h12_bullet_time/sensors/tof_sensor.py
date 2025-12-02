@@ -427,6 +427,11 @@ class TofSensor(SensorBase):
             target_pos_w,
             target_quat_w,
         )
+        
+        # Reshape back to proper batch dimensions: (N*M, 3) -> (N, M, 3)
+        num_envs = source_pos_w.shape[0]
+        target_pos_source = target_pos_source.reshape(num_envs, total_num_frames, 3)
+        target_quat_source = target_quat_source.reshape(num_envs, total_num_frames, 4)
 
         # Compute the normalized distances of the target frame(s) relative to the source frame
         # Target pos in source frame: (N, M, 3) -> (N, 1, M, 3)

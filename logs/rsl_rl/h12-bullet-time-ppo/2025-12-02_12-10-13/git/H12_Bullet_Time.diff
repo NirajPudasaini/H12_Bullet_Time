@@ -1,0 +1,312 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-38-21/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-40-02/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-41-14/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-43-24/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-47-39/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_12-04-57/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_12-08-16/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_12-10-13/
+	outputs/2025-12-02/11-38-21/
+	outputs/2025-12-02/11-40-02/
+	outputs/2025-12-02/11-41-14/
+	outputs/2025-12-02/11-43-24/
+	outputs/2025-12-02/11-47-39/
+	outputs/2025-12-02/12-04-56/
+	outputs/2025-12-02/12-08-15/
+	outputs/2025-12-02/12-10-13/
+	test_tof_obs.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+index 020db1c..c0d5d34 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+@@ -36,6 +36,45 @@ _projectile_radius = 0.15
+ # Extract sensor poses from URDF
+ _sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
+ 
++# Debug: print how many sensors were found
++if not _sensor_library:
++    import warnings
++    warnings.warn(
++        f"[TOF CONFIG] No TOF sensors found in URDF at {H12_CFG_HANDLESS.spawn.asset_path}\n"
++        "Sensors will not be added to scene. Check URDF for TOF marker elements."
++    )
++else:
++    print(f"[TOF CONFIG] Found {len(_sensor_library)} sensor locations in URDF")
++    for link_path, poses in _sensor_library.items():
++        print(f"  - {link_path}: {len(poses)} sensor poses")
++
++
++# Build sensor configs dictionary BEFORE class definition so they can be added to the class
++_sensor_configs = {}
++for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
++    # Create a valid sensor name
++    sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
++    
++    # Extract positions and orientations from Pose3D objects
++    sensor_positions = [pose.pos for pose in sensor_poses]
++    sensor_orientations = [pose.quat for pose in sensor_poses]
++    
++    # Create the sensor config
++    sensor_cfg = TofSensorCfg(
++        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
++        target_frames=[
++            TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
++        ],
++        relative_sensor_pos=sensor_positions,
++        relative_sensor_quat=sensor_orientations,
++        debug_vis=False,
++        max_range=4.0,  # meters
++        projectile_radius=_projectile_radius,  # FOV radius matching projectile size
++    )
++    
++    _sensor_configs[sensor_name] = sensor_cfg
++    print(f"[TOF CONFIG] Added sensor: {sensor_name} with {len(sensor_poses)} measurement points")
++
+ 
+ @configclass
+ class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
+@@ -80,29 +119,8 @@ class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
+     )
+ 
+ 
+-# Dynamically add TOF sensors to the scene config if sensors were found in URDF
+-for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
+-    # Create a valid sensor name
+-    sensor_name = f"tof_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
+-    
+-    # Extract positions and orientations from Pose3D objects
+-    sensor_positions = [pose.pos for pose in sensor_poses]
+-    sensor_orientations = [pose.quat for pose in sensor_poses]
+-    
+-    # Create the sensor config and add it as a class attribute
+-    sensor_cfg = TofSensorCfg(
+-        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
+-        target_frames=[
+-            TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
+-        ],
+-        relative_sensor_pos=sensor_positions,
+-        relative_sensor_quat=sensor_orientations,
+-        debug_vis=False,
+-        max_range=4.0,  # meters
+-        projectile_radius=_projectile_radius,  # FOV radius matching projectile size
+-    )
+-    
+-    # Add it as a class attribute
++# Now add all sensor configs as class attributes after class is defined
++for sensor_name, sensor_cfg in _sensor_configs.items():
+     setattr(H12BulletTimeSceneCfg_TOF, sensor_name, sensor_cfg)
+ 
+ ##
+@@ -181,7 +199,7 @@ class ObservationsCfg:
+         tof_distances = ObsTerm(
+             func=local_mdp.tof_distances_obs,
+             scale=0.25,  # Normalize to [0, 1] approximately (max_range=4.0)
+-            params={"max_range": 4.0},
++            params={"max_range": 4.0, "handle_nan": "replace_with_max"},
+         )
+         
+         def __post_init__(self) -> None:
+@@ -313,12 +331,12 @@ class EventCfg:
+         },
+     )
+ 
+-    # Debug: log TOF readings at reset to verify sensors
+-    log_tof = EventTerm(
+-        func=local_mdp.print_tof_readings,
+-        mode="reset",
+-        params={},
+-    )
++    # Debug: log TOF readings at reset to verify sensors (DISABLED for multi-env compatibility)
++    # log_tof = EventTerm(
++    #     func=local_mdp.print_tof_readings,
++    #     mode="reset",
++    #     params={},
++    # )
+ 
+ @configclass
+ class CurriculumCfg:
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+index 13ea51a..2626000 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+@@ -182,7 +182,13 @@ def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = No
+         # Get the actual sensor object from the scene
+         try:
+             sensor = env.scene[sensor_name]
+-            data = sensor.data
++            # IMPORTANT: Don't call sensor.data directly in multi-env setting
++            # Instead, access the internal data buffer safely
++            if not hasattr(sensor, "_data"):
++                print(f"  Sensor[{s_idx}] ({sensor_name}): no _data attribute")
++                continue
++            
++            data = sensor._data
+         except Exception as e:
+             print(f"  Sensor[{s_idx}] ({sensor_name}): failed to access data: {e}")
+             continue
+@@ -208,17 +214,16 @@ def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = No
+                 arr = tof.cpu()
+             else:
+                 import numpy as _np
+-
+                 arr = _np.asarray(tof)
+ 
+-            # arr expected shape: (num_envs, num_sensors, num_targets) or similar
++            # arr expected shape: (num_envs, num_sensors, num_targets, num_pixels)
+             if hasattr(arr, "numpy"):
+                 # torch tensor
+                 vals = arr.numpy()
+             else:
+                 vals = arr
+ 
+-            # Extract env slice
++            # Extract env slice safely
+             if vals.ndim == 0:
+                 print(f"  Sensor[{s_idx}] ({sensor_name}): scalar={vals}")
+                 continue
+@@ -227,6 +232,7 @@ def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = No
+                 print(f"  Sensor[{s_idx}] ({sensor_name}): env index {env_idx} out of range (shape {vals.shape})")
+                 continue
+ 
++            # Safely index the environment
+             slice_env = vals[env_idx]
+ 
+             # Flatten and compute stats
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+index d052b9e..a480917 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+@@ -92,73 +92,81 @@ def tof_distances_obs(
+ ) -> torch.Tensor:
+     """TOF sensor distance readings aggregated across all sensors.
+     
+-    Accesses sensor.data property which triggers automatic updates via SensorBase._update_outdated_buffers().
+-    This is the standard IsaacLab pattern for lazy-evaluated sensor data.
+-    
+     Args:
+         env: Environment instance
+         max_range: Maximum range of TOF sensors (used for normalization)
+-        handle_nan: How to handle NaN values:
+-            - "replace_with_max": Replace NaN with max_range
+-            - "zero": Replace NaN with 0
+-            - "keep": Keep NaN values as-is
++        handle_nan: How to handle NaN values
+         
+     Returns:
+         Flattened TOF sensor distances (num_envs, total_num_measurements)
+         Normalized by max_range so values are in [0, 1]
+     """
+-    # Check if environment has sensors
++    num_envs = env.num_envs
++    
++    # Get all sensor names from scene
+     if not hasattr(env.scene, "sensors") or len(env.scene.sensors) == 0:
+-        # No sensors in scene, return empty tensor
+-        num_envs = env.num_envs
+         return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+     
+-    # Collect distances from all sensors
+-    all_distances = []
++    sensor_names = list(env.scene.sensors)  # Convert to list in case it's an iterator
++    all_sensor_data = []
+     
+-    # env.scene.sensors is a list of sensor names (strings)
+-    for sensor_name in env.scene.sensors:
+-        # Get the actual sensor object from the scene
++    # Iterate through all sensors and collect distance data
++    for sensor_name in sensor_names:
+         try:
++            # Get sensor object and its data
+             sensor = env.scene[sensor_name]
+             sensor_data = sensor.data
+             
+-            # Try tof_distances first (preferred, includes FOV-based culling)
++            # Get distance measurements (try multiple possible attribute names)
++            distances = None
+             if hasattr(sensor_data, "tof_distances"):
+-                distances = sensor_data.tof_distances  # Shape: (num_envs, num_sensors, num_targets)
+-            # Fallback to raw_target_distances
++                distances = sensor_data.tof_distances
+             elif hasattr(sensor_data, "raw_target_distances"):
+                 distances = sensor_data.raw_target_distances
+-            # Final fallback to distances attribute
+             elif hasattr(sensor_data, "distances"):
+                 distances = sensor_data.distances
+-            else:
+-                # Skip this sensor if it has no distance data
++            
++            if distances is None or not torch.is_tensor(distances):
+                 continue
+             
+-            # Flatten each sensor's measurements: (num_envs, num_sensors, num_targets) -> (num_envs, flattened)
+-            distances_flat = distances.reshape(distances.shape[0], -1)  # (num_envs, flattened_dims)
+-            all_distances.append(distances_flat)
++            # Flatten all dimensions except the batch (environment) dimension
++            # distances shape: (num_envs, num_measurement_points, num_targets, num_pixels)
++            # We want: (num_envs, flattened_features)
++            if distances.shape[0] != num_envs:
++                continue
++            
++            # Flatten from dimension 1 onwards
++            flattened = distances.reshape(num_envs, -1)  # (num_envs, all_other_dims)
++            all_sensor_data.append(flattened)
++            
+         except Exception:
+-            # Skip sensors that fail to access data
++            # Skip any sensor that fails
+             continue
+     
+-    if not all_distances:
+-        # No valid sensor data found, return empty tensor
+-        num_envs = env.num_envs
++    # If no valid sensors found, return empty observation
++    if not all_sensor_data:
+         return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+     
+     # Concatenate all sensor readings
+-    tof_readings = torch.cat(all_distances, dim=1)  # (num_envs, total_dims)
++    tof_readings = torch.cat(all_sensor_data, dim=1)
+     
+     # Handle NaN values
+     if handle_nan == "replace_with_max":
+-        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(max_range, device=env.device), tof_readings)
++        tof_readings = torch.nan_to_num(tof_readings, nan=max_range)
+     elif handle_nan == "zero":
+-        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(0.0, device=env.device), tof_readings)
+-    # else: keep as-is
++        tof_readings = torch.nan_to_num(tof_readings, nan=0.0)
++    elif handle_nan == "mean":
++        # Replace NaN with mean of valid values per environment
++        valid_mask = ~torch.isnan(tof_readings)
++        for env_idx in range(num_envs):
++            valid = tof_readings[env_idx, valid_mask[env_idx]]
++            if valid.numel() > 0:
++                mean_val = valid.mean()
++            else:
++                mean_val = max_range
++            tof_readings[env_idx, ~valid_mask[env_idx]] = mean_val
+     
+-    # Normalize by max_range
+-    tof_normalized = tof_readings / max_range
++    # Normalize to [0, 1]
++    tof_normalized = torch.clamp(tof_readings / max_range, min=0.0, max=1.0)
+     
+     return tof_normalized

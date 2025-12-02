@@ -1,0 +1,78 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-38-21/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-40-02/
+	outputs/2025-12-02/11-38-21/
+	outputs/2025-12-02/11-40-02/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+index d052b9e..c1b714c 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+@@ -99,9 +99,10 @@ def tof_distances_obs(
+         env: Environment instance
+         max_range: Maximum range of TOF sensors (used for normalization)
+         handle_nan: How to handle NaN values:
+-            - "replace_with_max": Replace NaN with max_range
+-            - "zero": Replace NaN with 0
+-            - "keep": Keep NaN values as-is
++            - "replace_with_max": Replace NaN with max_range (projectile out of range)
++            - "zero": Replace NaN with 0 (treat as very close, conservative)
++            - "mean": Replace NaN with normalized mean distance (indicates uncertainty)
++            - "keep": Keep NaN values as-is (for downstream filtering)
+         
+     Returns:
+         Flattened TOF sensor distances (num_envs, total_num_measurements)
+@@ -151,14 +152,35 @@ def tof_distances_obs(
+     # Concatenate all sensor readings
+     tof_readings = torch.cat(all_distances, dim=1)  # (num_envs, total_dims)
+     
+-    # Handle NaN values
++    # Handle NaN values before normalization
+     if handle_nan == "replace_with_max":
+-        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(max_range, device=env.device), tof_readings)
++        # Out of range = max_range (most conservative, projectile is far)
++        tof_readings = torch.where(torch.isnan(tof_readings), 
++                                   torch.tensor(max_range, dtype=torch.float32, device=env.device), 
++                                   tof_readings)
+     elif handle_nan == "zero":
+-        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(0.0, device=env.device), tof_readings)
+-    # else: keep as-is
++        # Not detected = 0 (most conservative, treat as very close threat)
++        tof_readings = torch.where(torch.isnan(tof_readings), 
++                                   torch.tensor(0.0, dtype=torch.float32, device=env.device), 
++                                   tof_readings)
++    elif handle_nan == "mean":
++        # Not detected = mean of valid detections (indicates uncertainty)
++        # Compute mean for each environment (ignoring NaN)
++        valid_mask = ~torch.isnan(tof_readings)
++        for env_idx in range(tof_readings.shape[0]):
++            valid_distances = tof_readings[env_idx, valid_mask[env_idx]]
++            if valid_distances.numel() > 0:
++                mean_dist = valid_distances.mean()
++            else:
++                # No valid detections in this env, use max_range
++                mean_dist = torch.tensor(max_range, dtype=torch.float32, device=env.device)
++            tof_readings[env_idx, ~valid_mask[env_idx]] = mean_dist
++    # else: keep as-is (NaN remains)
+     
+     # Normalize by max_range
+     tof_normalized = tof_readings / max_range
+     
++    # Clamp to [0, 1] range in case of any edge cases
++    tof_normalized = torch.clamp(tof_normalized, min=0.0, max=1.0)
++    
+     return tof_normalized

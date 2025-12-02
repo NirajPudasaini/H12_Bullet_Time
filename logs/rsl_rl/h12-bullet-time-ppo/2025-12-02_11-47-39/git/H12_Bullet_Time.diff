@@ -1,0 +1,219 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-38-21/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-40-02/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-41-14/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-43-24/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-47-39/
+	outputs/2025-12-02/11-38-21/
+	outputs/2025-12-02/11-40-02/
+	outputs/2025-12-02/11-41-14/
+	outputs/2025-12-02/11-43-24/
+	outputs/2025-12-02/11-47-39/
+	test_tof_obs.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+index 020db1c..ed6e9ad 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+@@ -36,6 +36,18 @@ _projectile_radius = 0.15
+ # Extract sensor poses from URDF
+ _sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
+ 
++# Debug: print how many sensors were found
++if not _sensor_library:
++    import warnings
++    warnings.warn(
++        f"[TOF CONFIG] No TOF sensors found in URDF at {H12_CFG_HANDLESS.spawn.asset_path}\n"
++        "Sensors will not be added to scene. Check URDF for TOF marker elements."
++    )
++else:
++    print(f"[TOF CONFIG] Found {len(_sensor_library)} sensor locations in URDF")
++    for link_path, poses in _sensor_library.items():
++        print(f"  - {link_path}: {len(poses)} sensor poses")
++
+ 
+ @configclass
+ class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
+@@ -104,6 +116,7 @@ for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
+     
+     # Add it as a class attribute
+     setattr(H12BulletTimeSceneCfg_TOF, sensor_name, sensor_cfg)
++    print(f"[TOF CONFIG] Added sensor: {sensor_name} with {len(sensor_poses)} measurement points")
+ 
+ ##
+ # MDP settings
+@@ -181,7 +194,7 @@ class ObservationsCfg:
+         tof_distances = ObsTerm(
+             func=local_mdp.tof_distances_obs,
+             scale=0.25,  # Normalize to [0, 1] approximately (max_range=4.0)
+-            params={"max_range": 4.0},
++            params={"max_range": 4.0, "handle_nan": "replace_with_max"},
+         )
+         
+         def __post_init__(self) -> None:
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+index d052b9e..513d6a8 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+@@ -99,16 +99,23 @@ def tof_distances_obs(
+         env: Environment instance
+         max_range: Maximum range of TOF sensors (used for normalization)
+         handle_nan: How to handle NaN values:
+-            - "replace_with_max": Replace NaN with max_range
+-            - "zero": Replace NaN with 0
+-            - "keep": Keep NaN values as-is
++            - "replace_with_max": Replace NaN with max_range (projectile out of range)
++            - "zero": Replace NaN with 0 (treat as very close, conservative)
++            - "mean": Replace NaN with normalized mean distance (indicates uncertainty)
++            - "keep": Keep NaN values as-is (for downstream filtering)
+         
+     Returns:
+         Flattened TOF sensor distances (num_envs, total_num_measurements)
+         Normalized by max_range so values are in [0, 1]
+     """
+     # Check if environment has sensors
+-    if not hasattr(env.scene, "sensors") or len(env.scene.sensors) == 0:
++    if not hasattr(env.scene, "sensors"):
++        # No sensors in scene, return empty tensor
++        num_envs = env.num_envs
++        return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
++    
++    sensor_names = env.scene.sensors
++    if not sensor_names or len(sensor_names) == 0:
+         # No sensors in scene, return empty tensor
+         num_envs = env.num_envs
+         return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+@@ -117,30 +124,63 @@ def tof_distances_obs(
+     all_distances = []
+     
+     # env.scene.sensors is a list of sensor names (strings)
+-    for sensor_name in env.scene.sensors:
++    for sensor_name in sensor_names:
+         # Get the actual sensor object from the scene
+         try:
+             sensor = env.scene[sensor_name]
++            
++            # Access sensor data - this triggers the update
++            if not hasattr(sensor, "data"):
++                continue
++            
+             sensor_data = sensor.data
++            if sensor_data is None:
++                continue
+             
+             # Try tof_distances first (preferred, includes FOV-based culling)
+-            if hasattr(sensor_data, "tof_distances"):
+-                distances = sensor_data.tof_distances  # Shape: (num_envs, num_sensors, num_targets)
+-            # Fallback to raw_target_distances
+-            elif hasattr(sensor_data, "raw_target_distances"):
+-                distances = sensor_data.raw_target_distances
+-            # Final fallback to distances attribute
+-            elif hasattr(sensor_data, "distances"):
+-                distances = sensor_data.distances
++            distances = None
++            for attr_name in ["tof_distances", "raw_target_distances", "distances", "target_distances"]:
++                if hasattr(sensor_data, attr_name):
++                    distances = getattr(sensor_data, attr_name)
++                    break
++            
++            if distances is None:
++                # No distance data found for this sensor
++                continue
++            
++            # Ensure we have a valid tensor
++            if not torch.is_tensor(distances):
++                continue
++            
++            # Flatten each sensor's measurement points and targets into a single feature vector
++            # Shape: (num_envs, num_sensors, num_targets, num_pixels) -> (num_envs, num_sensors * num_targets * num_pixels)
++            num_envs = distances.shape[0]
++            if len(distances.shape) < 2:
++                # Invalid shape, skip
++                continue
++                
++            num_measurement_points = distances.shape[1]
++            
++            # Compute total flattened size
++            if len(distances.shape) == 4:
++                # (num_envs, num_sensors, num_targets, num_pixels)
++                flat_size = num_measurement_points * distances.shape[2] * distances.shape[3]
++            elif len(distances.shape) == 3:
++                # (num_envs, num_sensors, num_targets)
++                flat_size = num_measurement_points * distances.shape[2]
++            elif len(distances.shape) == 2:
++                # (num_envs, num_sensors)
++                flat_size = num_measurement_points
+             else:
+-                # Skip this sensor if it has no distance data
++                # Unknown shape, skip
+                 continue
+             
+-            # Flatten each sensor's measurements: (num_envs, num_sensors, num_targets) -> (num_envs, flattened)
+-            distances_flat = distances.reshape(distances.shape[0], -1)  # (num_envs, flattened_dims)
++            # Reshape: flatten all sensor measurement dimensions
++            distances_flat = distances.reshape(num_envs, flat_size)
+             all_distances.append(distances_flat)
++            
+         except Exception:
+-            # Skip sensors that fail to access data
++            # Skip sensors that fail to access data silently
+             continue
+     
+     if not all_distances:
+@@ -148,17 +188,35 @@ def tof_distances_obs(
+         num_envs = env.num_envs
+         return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+     
+-    # Concatenate all sensor readings
+-    tof_readings = torch.cat(all_distances, dim=1)  # (num_envs, total_dims)
++    # Concatenate all sensor readings (stack features from all sensors)
++    # Each sensor has shape (num_envs, flattened_sensor_features)
++    tof_readings = torch.cat(all_distances, dim=1)  # (num_envs, total_features_all_sensors)
+     
+-    # Handle NaN values
++    # Handle NaN values before normalization
+     if handle_nan == "replace_with_max":
+-        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(max_range, device=env.device), tof_readings)
++        # Out of range = max_range (most conservative, projectile is far)
++        tof_readings = torch.nan_to_num(tof_readings, nan=max_range)
+     elif handle_nan == "zero":
+-        tof_readings = torch.where(torch.isnan(tof_readings), torch.tensor(0.0, device=env.device), tof_readings)
+-    # else: keep as-is
++        # Not detected = 0 (most conservative, treat as very close threat)
++        tof_readings = torch.nan_to_num(tof_readings, nan=0.0)
++    elif handle_nan == "mean":
++        # Not detected = mean of valid detections (indicates uncertainty)
++        # Compute mean for each environment (ignoring NaN)
++        valid_mask = ~torch.isnan(tof_readings)
++        for env_idx in range(tof_readings.shape[0]):
++            valid_distances = tof_readings[env_idx, valid_mask[env_idx]]
++            if valid_distances.numel() > 0:
++                mean_dist = valid_distances.mean()
++            else:
++                # No valid detections in this env, use max_range
++                mean_dist = max_range
++            tof_readings[env_idx, ~valid_mask[env_idx]] = mean_dist
++    # else: keep as-is (NaN remains)
+     
+     # Normalize by max_range
+     tof_normalized = tof_readings / max_range
+     
++    # Clamp to [0, 1] range in case of any edge cases
++    tof_normalized = torch.clamp(tof_normalized, min=0.0, max=1.0)
++    
+     return tof_normalized
