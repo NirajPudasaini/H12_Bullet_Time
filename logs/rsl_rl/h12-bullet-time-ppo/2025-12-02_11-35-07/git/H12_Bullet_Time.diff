@@ -1,0 +1,581 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_cfg.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_data.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/test_scripts/tof_sensor_test.py
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-01_16-00-00/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-01_16-00-54/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-01_16-13-29/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-30-53/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-33-34/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-02_11-35-07/
+	outputs/2025-12-01/15-59-59/
+	outputs/2025-12-01/16-00-54/
+	outputs/2025-12-01/16-13-29/
+	outputs/2025-12-02/
+	test_tof_env.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+index 6290922..14a1ede 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor.py
+@@ -308,6 +308,8 @@ class TofSensor(SensorBase):
+         # when updating sensor in _update_buffers_impl
+         duplicate_frame_indices = []
+ 
++        self.make_grid()
++
+         # Go through each body name and determine the number of duplicates we need for that frame
+         # and extract the offsets. This is all done to handle the case where multiple frames
+         # reference the same body, but have different names and/or offsets
+@@ -366,7 +368,8 @@ class TofSensor(SensorBase):
+             self._num_envs, self._num_sensors, len(duplicate_frame_indices), 3, device=self._device
+         )
+         self._data.tof_distances = torch.zeros(
+-            self._num_envs, self._num_sensors, len(duplicate_frame_indices), dtype=torch.float32, device=self._device
++            self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
++            dtype=torch.float32, device=self._device
+         )
+ 
+     def _update_buffers_impl(self, env_ids: Sequence[int]):
+@@ -434,62 +437,50 @@ class TofSensor(SensorBase):
+         normalized_distances = torch.linalg.norm(target_pos_sensor, dim=-1)
+ 
+         ############### TOF simulation ###############
+-
+-        # Time of flight distance is the distance to the target sphere if the sphere is within the sensor line of sight.
+-        # The sensor's forward direction is the local Z-axis, transformed by the sensor's orientation.
+-        #
+-        # Geometry:
+-        #   - sensor_forward: unit vector in sensor's forward direction (Z-axis)
+-        #   - target_pos_sensor: vector from sensor to target center
+-        #   - dot_product (proj_z): projection of target onto sensor's forward axis (depth along Z)
+-        #   - perpendicular_dist: distance from sensor axis in XY plane (radial distance)
+-        #
+-        # Detection condition: target is detected if:
+-        #   1. proj_z > 0 (target is in front of sensor)
+-        #   2. perpendicular_dist <= sensor_fov_radius (target is within beam width)
+-        #   3. distance <= max_range
+-
+-        # Get sensor forward directions (unit vectors): (S, 3)
+-        sensor_forward = self._quat_rotate_vec(
+-            self._relative_sensor_quat, 
+-            torch.tensor([0.0, 0.0, 1.0], device=self.device)
+-        )
++        # Multi-pixel ToF: each sensor has a pixel_count x pixel_count grid of rays
++        # Shapes: N=envs, S=sensors, M=targets, P=pixel_count^2
++        
++        P = self.cfg.pixel_count ** 2
+         
+-        # Reshape for broadcasting with target_pos_sensor (N, S, M, 3)
+-        # sensor_forward: (S, 3) -> (1, S, 1, 3)
+-        sensor_forward_expanded = sensor_forward.view(1, self._num_sensors, 1, 3)
++        # Get base sensor forward directions: (S, 3)
++        z_axis = torch.tensor([0.0, 0.0, 1.0], device=self.device)
++        sensor_forward_base = self._quat_rotate_vec(self._relative_sensor_quat, z_axis)
+         
+-        # Compute projection along sensor's forward axis (Z-component in sensor frame)
+-        # This is the "depth" - how far along the sensor's line of sight the target is
+-        # Shape: (N, S, M)
+-        proj_z = torch.sum(sensor_forward_expanded * target_pos_sensor, dim=-1)
++        # Apply grid rotations to get ray directions for each pixel: (S, P, 3)
++        # _grid_quats: (P, 4) -> broadcast with sensor_forward_base: (S, 1, 3)
++        sensor_forward_base_exp = sensor_forward_base.unsqueeze(1).expand(-1, P, -1)  # (S, P, 3)
++        grid_quats_exp = self._grid_quats.unsqueeze(0).expand(self._num_sensors, -1, -1)  # (S, P, 4)
++        ray_dirs = self._quat_rotate_vec(grid_quats_exp, sensor_forward_base_exp)  # (S, P, 3)
+         
+-        # Compute the projection vector along the sensor axis
+-        # Shape: (N, S, M, 3)
+-        proj_vec = proj_z.unsqueeze(-1) * sensor_forward_expanded
++        # Expand target_pos_sensor for pixel dimension: (N, S, M, 3) -> (N, S, M, 1, 3)
++        target_pos_exp = target_pos_sensor.unsqueeze(-2)  # (N, S, M, 1, 3)
+         
+-        # Compute perpendicular component (XY plane distance from sensor axis)
+-        # This is the radial distance from the sensor's beam centerline
+-        # Shape: (N, S, M, 3)
+-        perpendicular_vec = target_pos_sensor - proj_vec
++        # Expand ray_dirs for batch/target dims: (S, P, 3) -> (1, S, 1, P, 3)
++        ray_dirs_exp = ray_dirs.unsqueeze(0).unsqueeze(2)  # (1, S, 1, P, 3)
+         
+-        # Distance from sensor axis (perpendicular/radial distance)
+-        # Shape: (N, S, M)
+-        perpendicular_dist = torch.linalg.norm(perpendicular_vec, dim=-1)
++        # Projection of target onto each ray direction (depth along ray): (N, S, M, P)
++        proj_z = torch.sum(ray_dirs_exp * target_pos_exp, dim=-1)
+         
+-        # Detection conditions:
+-        # 1. Target is in front of sensor (proj_z > 0)
+-        # 2. Target is within sensor's field of view radius
+-        # 3. Target is within max range
++        # Perpendicular distance from each ray axis: (N, S, M, P)
++        proj_vec = proj_z.unsqueeze(-1) * ray_dirs_exp  # (N, S, M, P, 3)
++        perpendicular_vec = target_pos_exp - proj_vec    # (N, S, M, P, 3)
++        perpendicular_dist = torch.linalg.norm(perpendicular_vec, dim=-1)  # (N, S, M, P)
++        
++        # Expand normalized_distances for pixel dimension: (N, S, M) -> (N, S, M, P)
++        sphere_offset = self.cfg.projectile_radius*torch.sin(torch.acos(perpendicular_dist/self.cfg.projectile_radius)) # offset = r*sin(theta), where theta = acos(perpendicular_dist/r)
++        normalized_distances_exp = normalized_distances.unsqueeze(-1).expand(-1, -1, -1, P)
++        final_distances = normalized_distances_exp - sphere_offset
++        
++        # Detection conditions per pixel
+         in_front = proj_z > 0
+-        within_fov = perpendicular_dist <= self.cfg.sensor_fov_radius
+-        within_range = normalized_distances <= self.cfg.max_range
++        within_fov = perpendicular_dist <= self.cfg.projectile_radius
++        within_range = normalized_distances_exp <= self.cfg.max_range
+         
+-        # ToF distance is valid only if all conditions are met
++        # ToF distance per pixel: (N, S, M, P)
+         tof_distances = torch.where(
+-            in_front & within_fov & within_range, 
+-            normalized_distances, 
+-            torch.nan
++            in_front & within_fov & within_range,
++            final_distances,
++            torch.full_like(normalized_distances_exp, torch.nan)
+         )
+ 
+         ######################################################
+@@ -507,6 +498,36 @@ class TofSensor(SensorBase):
+         self._data.tof_distances[:] = tof_distances
+ 
+ 
++    def make_grid(self):
++        """Create quaternions representing ray directions for each pixel in the sensor grid.
++        
++        Output shape: (pixel_count^2, 4) - flattened grid of rotation quaternions.
++        Each quaternion rotates the center ray to a pixel's ray direction.
++        """
++        fov_angle = self.cfg.fov_deg * (torch.pi / 180.0)
++        half_fov = fov_angle / 2.0
++        P = self.cfg.pixel_count
++        
++        # Create grid of angles (X=yaw around Y-axis, Y=pitch around X-axis)
++        angles_x = torch.linspace(-half_fov, half_fov, P, device=self.device)
++        angles_y = torch.linspace(half_fov, -half_fov, P, device=self.device)
++        grid_X, grid_Y = torch.meshgrid(angles_x, angles_y, indexing='xy')
++        
++        # Flatten to (P^2,)
++        ax = grid_X.reshape(-1)
++        ay = grid_Y.reshape(-1)
++        
++        # Build rotation quaternions: yaw (around Y), then pitch (around X)
++        x_axis = torch.tensor([1.0, 0.0, 0.0], device=self.device).expand(P * P, -1)
++        y_axis = torch.tensor([0.0, 1.0, 0.0], device=self.device).expand(P * P, -1)
++        
++        quat_yaw = quat_from_angle_axis(ax, y_axis)    # (P^2, 4)
++        quat_pitch = quat_from_angle_axis(ay, x_axis)  # (P^2, 4)
++        
++        # Combined rotation: pitch after yaw -> q_pitch * q_yaw
++        self._grid_quats = self._quat_multiply(quat_pitch, quat_yaw)  # (P^2, 4)
++
++    
+     def _set_debug_vis_impl(self, debug_vis: bool):
+         # set visibility of markers
+         # note: parent only deals with callbacks. not their visibility
+@@ -521,54 +542,52 @@ class TofSensor(SensorBase):
+                 self.frame_visualizer.set_visibility(False)
+ 
+     def _debug_vis_callback(self, event):
+-        """Visualize sensor forward directions as lines (Z-axis)."""
++        """Visualize sensor ray directions as lines for each pixel in the grid."""
+         
+-        # Calculate sensor world positions
+-        # source_pos_w: (N, 3) -> (N*S, 3)
+-        source_pos_expanded = self._data.source_pos_w.repeat_interleave(self._num_sensors, dim=0)
+-        source_quat_expanded = self._data.source_quat_w.repeat_interleave(self._num_sensors, dim=0)
++        N, S, P = self._num_envs, self._num_sensors, self.cfg.pixel_count ** 2
+         
+-        # relative_sensor_pos: (S, 3) -> (N*S, 3)
+-        sensor_rel_pos_expanded = self._relative_sensor_pos.repeat(self._num_envs, 1)
+-        # relative_sensor_quat: (S, 4) -> (N*S, 4)
+-        sensor_rel_quat_expanded = self._relative_sensor_quat.repeat(self._num_envs, 1)
+-
+-        # Compute sensor world position and orientation
++        # Calculate sensor world positions and orientations: (N, S, 3/4)
++        source_pos = self._data.source_pos_w.unsqueeze(1)  # (N, 1, 3)
++        source_quat = self._data.source_quat_w.unsqueeze(1)  # (N, 1, 4)
++        sensor_rel_pos = self._relative_sensor_pos.unsqueeze(0)  # (1, S, 3)
++        sensor_rel_quat = self._relative_sensor_quat.unsqueeze(0)  # (1, S, 4)
++        
++        # Compute sensor world positions: (N, S, 3)
+         sensor_pos_w, sensor_quat_w = combine_frame_transforms(
+-            source_pos_expanded, source_quat_expanded, 
+-            sensor_rel_pos_expanded, sensor_rel_quat_expanded
++            source_pos.expand(-1, S, -1).reshape(-1, 3),
++            source_quat.expand(-1, S, -1).reshape(-1, 4),
++            sensor_rel_pos.expand(N, -1, -1).reshape(-1, 3),
++            sensor_rel_quat.expand(N, -1, -1).reshape(-1, 4),
+         )
++        sensor_pos_w = sensor_pos_w.view(N, S, 3)
++        sensor_quat_w = sensor_quat_w.view(N, S, 4)
+         
+-        # Calculate the end position of the direction line (along sensor's Z-axis)
+-        # The line length represents the max detection range
+-        line_length = self.cfg.max_range
++        # Get ray directions for each pixel in world frame
++        # Base forward direction scaled by max_range
++        forward_local = torch.tensor([0.0, 0.0, self.cfg.max_range], device=self.device)
+         
+-        # Forward direction in sensor local frame is Z-axis: [0, 0, 1]
+-        forward_dir_local = torch.tensor([0.0, 0.0, line_length], device=self.device)
++        # Apply grid rotations to get local ray directions: (P, 3)
++        ray_dirs_local = self._quat_rotate_vec(self._grid_quats, forward_local)
+         
+-        # Rotate forward direction by sensor world orientation
+-        sensor_forward_w = self._quat_rotate_vec(sensor_quat_w, forward_dir_local)  # (N*S, 3)
++        # Transform to world frame for each sensor: (N, S, P, 3)
++        # sensor_quat_w: (N, S, 4) -> (N, S, 1, 4)
++        sensor_quat_exp = sensor_quat_w.unsqueeze(2).expand(-1, -1, P, -1)  # (N, S, P, 4)
++        ray_dirs_local_exp = ray_dirs_local.unsqueeze(0).unsqueeze(0).expand(N, S, -1, -1)  # (N, S, P, 3)
++        ray_dirs_w = self._quat_rotate_vec(sensor_quat_exp, ray_dirs_local_exp)  # (N, S, P, 3)
+         
+-        # End position of the direction line
+-        sensor_end_pos_w = sensor_pos_w + sensor_forward_w  # (N*S, 3)
++        # Compute start and end positions for all rays
++        sensor_pos_exp = sensor_pos_w.unsqueeze(2).expand(-1, -1, P, -1)  # (N, S, P, 3)
++        start_pos = sensor_pos_exp.reshape(-1, 3)  # (N*S*P, 3)
++        end_pos = (sensor_pos_exp + ray_dirs_w).reshape(-1, 3)  # (N*S*P, 3)
+         
+-        # Get line visualization (position at midpoint, orientation pointing along line)
+-        lines_pos, lines_quat, lines_length = self._get_connecting_lines(
+-            start_pos=sensor_pos_w,
+-            end_pos=sensor_end_pos_w,
+-        )
+-
+-        # Only show direction lines (no frame markers)
+-        num_lines = lines_pos.size(0)
++        # Get line visualization
++        lines_pos, lines_quat, lines_length = self._get_connecting_lines(start_pos, end_pos)
+         
+-        # Marker scales: lines use length as z-scale
++        num_lines = lines_pos.size(0)
+         marker_scales = torch.ones(num_lines, 3, device=self.device)
+-        marker_scales[:, 2] = lines_length  # z-scale for lines
+-        
+-        # Marker indices: all lines use marker config index 1
++        marker_scales[:, 2] = lines_length
+         marker_indices = torch.ones(num_lines, device=self.device, dtype=torch.int32)
+ 
+-        # Update the visualizer with only lines
+         self.frame_visualizer.visualize(
+             translations=lines_pos,
+             orientations=lines_quat,
+@@ -601,20 +620,33 @@ class TofSensor(SensorBase):
+         Returns:
+             Rotated vector(s). Shape (..., 3)
+         """
+-        # Extract quaternion components
+         w = quat[..., 0:1]
+         xyz = quat[..., 1:4]
+         
+-        # If vec is a single vector, expand it
+         if vec.dim() == 1:
+             vec = vec.expand(quat.shape[:-1] + (3,))
+         
+-        # Quaternion rotation: v' = v + 2*w*(xyz × v) + 2*(xyz × (xyz × v))
+-        # Using the formula: v' = q * v * q_conjugate
+         t = 2.0 * torch.linalg.cross(xyz, vec)
+-        rotated = vec + w * t + torch.linalg.cross(xyz, t)
++        return vec + w * t + torch.linalg.cross(xyz, t)
++
++    def _quat_multiply(self, q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
++        """Multiply two quaternions (wxyz format): q1 * q2.
++        
++        Args:
++            q1, q2: Quaternions in (w, x, y, z) format. Shape (..., 4)
++            
++        Returns:
++            Product quaternion. Shape (..., 4)
++        """
++        w1, x1, y1, z1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
++        w2, x2, y2, z2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
+         
+-        return rotated
++        return torch.stack([
++            w1*w2 - x1*x2 - y1*y2 - z1*z2,
++            w1*x2 + x1*w2 + y1*z2 - z1*y2,
++            w1*y2 - x1*z2 + y1*w2 + z1*x2,
++            w1*z2 + x1*y2 - y1*x2 + z1*w2,
++        ], dim=-1)
+ 
+     def _get_connecting_lines(
+         self, start_pos: torch.Tensor, end_pos: torch.Tensor
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_cfg.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_cfg.py
+index 2cad60d..1b6504a 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_cfg.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_cfg.py
+@@ -81,10 +81,7 @@ class TofSensorCfg(FrameTransformerCfg):
+     max_range: float = 4.0  # meters
+     """Maximum detection range of the sensor in meters."""
+ 
+-    # projectile_radius: float = 0.5  # meters
+-    """Radius of the target projectile/sphere in meters."""
+-
+-    sensor_fov_radius: float = 0.05  # meters
++    projectile_radius: float = 0.05  # meters
+     """Field of view radius (beam width) in meters.
+     
+     This defines the cylindrical beam width of the ToF sensor. A target is only detected
+@@ -92,6 +89,12 @@ class TofSensorCfg(FrameTransformerCfg):
+     less than or equal to this radius.
+     """
+ 
++    fov_deg: float = 45.0
++    pixel_count: int = 8
++    """It is assumed that the sensor is a square with the number of pixels on each side.
++    The number of pixels is used to determine the angle of each pixel.
++    """
++
+     visualizer_cfg: VisualizationMarkersCfg = FRAME_MARKER_CFG.replace(prim_path="/Visuals/TofSensor")
+     """The configuration object for the visualization markers. Defaults to FRAME_MARKER_CFG.
+ 
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_data.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_data.py
+index ae88695..94e3b64 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_data.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/sensors/tof_sensor_data.py
+@@ -70,10 +70,10 @@ class TofSensorData:
+     """
+ 
+     tof_distances: torch.Tensor = None
+-    """Simulated TOF distances of each sensor.
++    """Simulated TOF distances for each pixel of each sensor.
+ 
+-    Shape is (N, S, M), where N is the number of environments, S is the number of sensors,
+-    and M is the number of target frames.
++    Shape is (N, S, M, P), where N is the number of environments, S is the number of sensors,
++    M is the number of target frames, and P is pixel_count^2 (flattened grid).
+ 
+-    Returns NaN if no target sphere is intersecting with the sensor range.
++    Returns NaN if no target sphere is intersecting with the sensor pixel's ray.
+     """
+\ No newline at end of file
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+index 2279d91..c46b6cf 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+@@ -30,7 +30,7 @@ from h12_bullet_time.sensors.tof_sensor_cfg import TofSensorCfg
+ from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
+ 
+ 
+-_projectile_radius = 0.075
++_projectile_radius = 0.3
+ 
+ 
+ # Extract sensor poses from URDF
+@@ -99,7 +99,7 @@ for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
+         relative_sensor_quat=sensor_orientations,
+         debug_vis=False,
+         max_range=4.0,  # meters
+-        sensor_fov_radius=_projectile_radius,
++        projectile_radius=_projectile_radius,  # FOV radius matching projectile size
+     )
+     
+     # Add it as a class attribute
+@@ -313,6 +313,12 @@ class EventCfg:
+         },
+     )
+ 
++    # Debug: log TOF readings at reset to verify sensors
++    log_tof = EventTerm(
++        func=local_mdp.print_tof_readings,
++        mode="reset",
++        params={},
++    )
+ 
+ @configclass
+ class CurriculumCfg:
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+index e5135f0..13ea51a 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+@@ -145,3 +145,106 @@ def launch_projectile_curriculum(
+ #         except (IndexError, RuntimeError):
+ #             # If action tensor shape is different, silently skip
+ #             pass
++
++
++def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = None) -> None:
++    """Debug helper: print a compact summary of TOF sensor readings.
++
++    Prints shapes, number of valid detections and a few sample values for the
++    first environment index (or the first index in env_ids if provided).
++    """
++    try:
++        sensor_names = getattr(env.scene, "sensors", None)
++    except Exception:
++        sensor_names = None
++
++    if not sensor_names:
++        print("[TOF DEBUG] No sensors found in scene.")
++        return
++
++    # choose environment index to inspect
++    env_idx = 0
++    if env_ids is not None:
++        try:
++            if isinstance(env_ids, torch.Tensor) and env_ids.numel() > 0:
++                env_idx = int(env_ids.flatten()[0].item())
++            elif isinstance(env_ids, (list, tuple)) and len(env_ids) > 0:
++                env_idx = int(env_ids[0])
++            else:
++                env_idx = int(env_ids)
++        except Exception:
++            env_idx = 0
++
++    # Print header
++    print(f"[TOF DEBUG] Env {env_idx}: {len(sensor_names)} sensor(s) present")
++
++    for s_idx, sensor_name in enumerate(sensor_names):
++        # Get the actual sensor object from the scene
++        try:
++            sensor = env.scene[sensor_name]
++            data = sensor.data
++        except Exception as e:
++            print(f"  Sensor[{s_idx}] ({sensor_name}): failed to access data: {e}")
++            continue
++
++        if data is None:
++            print(f"  Sensor[{s_idx}] ({sensor_name}): no data")
++            continue
++
++        # prefer tof_distances, fall back to raw_target_distances or distances
++        tof = None
++        for attr in ("tof_distances", "raw_target_distances", "distances", "target_distances"):
++            if hasattr(data, attr):
++                tof = getattr(data, attr)
++                break
++
++        if tof is None:
++            print(f"  Sensor[{s_idx}] ({sensor_name}): no distance attribute found")
++            continue
++
++        try:
++            # Ensure tensor on CPU for printing (handle numpy arrays too)
++            if hasattr(tof, "cpu"):
++                arr = tof.cpu()
++            else:
++                import numpy as _np
++
++                arr = _np.asarray(tof)
++
++            # arr expected shape: (num_envs, num_sensors, num_targets) or similar
++            if hasattr(arr, "numpy"):
++                # torch tensor
++                vals = arr.numpy()
++            else:
++                vals = arr
++
++            # Extract env slice
++            if vals.ndim == 0:
++                print(f"  Sensor[{s_idx}] ({sensor_name}): scalar={vals}")
++                continue
++
++            if vals.shape[0] <= env_idx:
++                print(f"  Sensor[{s_idx}] ({sensor_name}): env index {env_idx} out of range (shape {vals.shape})")
++                continue
++
++            slice_env = vals[env_idx]
++
++            # Flatten and compute stats
++            flat = slice_env.flatten()
++            import numpy as _np
++
++            nan_count = int(_np.isnan(flat).sum()) if _np.isnan(flat).any() else 0
++            valid_count = flat.size - nan_count
++            mean_val = float(_np.nanmean(flat)) if valid_count > 0 else float("nan")
++            sample_vals = flat[:8]
++
++            print(f"  Sensor[{s_idx}] ({sensor_name}): shape={vals.shape}, valid={valid_count}, nans={nan_count}, mean={mean_val:.3f}")
++            print("    samples:", ", ".join([f"{float(x):.3f}" if not _np.isnan(x) else "nan" for x in sample_vals]))
++        except Exception as e:
++            print(f"  Sensor[{s_idx}] ({sensor_name}): failed to read data: {e}")
++
++    # flush stdout to ensure visibility in logs
++    try:
++        sys.stdout.flush()
++    except Exception:
++        pass
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+index 7c9e587..d052b9e 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/observations.py
+@@ -90,7 +90,23 @@ def tof_distances_obs(
+     max_range: float = 4.0,
+     handle_nan: str = "replace_with_max",
+ ) -> torch.Tensor:
+-
++    """TOF sensor distance readings aggregated across all sensors.
++    
++    Accesses sensor.data property which triggers automatic updates via SensorBase._update_outdated_buffers().
++    This is the standard IsaacLab pattern for lazy-evaluated sensor data.
++    
++    Args:
++        env: Environment instance
++        max_range: Maximum range of TOF sensors (used for normalization)
++        handle_nan: How to handle NaN values:
++            - "replace_with_max": Replace NaN with max_range
++            - "zero": Replace NaN with 0
++            - "keep": Keep NaN values as-is
++        
++    Returns:
++        Flattened TOF sensor distances (num_envs, total_num_measurements)
++        Normalized by max_range so values are in [0, 1]
++    """
+     # Check if environment has sensors
+     if not hasattr(env.scene, "sensors") or len(env.scene.sensors) == 0:
+         # No sensors in scene, return empty tensor
+@@ -100,14 +116,32 @@ def tof_distances_obs(
+     # Collect distances from all sensors
+     all_distances = []
+     
+-    for sensor in env.scene.sensors:
+-        # Try to get TOF distance data
+-        if hasattr(sensor, "data") and hasattr(sensor.data, "distances"):
+-            distances = sensor.data.distances  # Shape: (num_envs, num_frames, num_targets)
++    # env.scene.sensors is a list of sensor names (strings)
++    for sensor_name in env.scene.sensors:
++        # Get the actual sensor object from the scene
++        try:
++            sensor = env.scene[sensor_name]
++            sensor_data = sensor.data
++            
++            # Try tof_distances first (preferred, includes FOV-based culling)
++            if hasattr(sensor_data, "tof_distances"):
++                distances = sensor_data.tof_distances  # Shape: (num_envs, num_sensors, num_targets)
++            # Fallback to raw_target_distances
++            elif hasattr(sensor_data, "raw_target_distances"):
++                distances = sensor_data.raw_target_distances
++            # Final fallback to distances attribute
++            elif hasattr(sensor_data, "distances"):
++                distances = sensor_data.distances
++            else:
++                # Skip this sensor if it has no distance data
++                continue
+             
+-            # Flatten each sensor's measurements
++            # Flatten each sensor's measurements: (num_envs, num_sensors, num_targets) -> (num_envs, flattened)
+             distances_flat = distances.reshape(distances.shape[0], -1)  # (num_envs, flattened_dims)
+             all_distances.append(distances_flat)
++        except Exception:
++            # Skip sensors that fail to access data
++            continue
+     
+     if not all_distances:
+         # No valid sensor data found, return empty tensor

@@ -30,7 +30,7 @@ from h12_bullet_time.sensors.tof_sensor_cfg import TofSensorCfg
 from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
 
 
-_projectile_radius = 0.075
+_projectile_radius = 0.15
 
 
 # Extract sensor poses from URDF
@@ -59,7 +59,7 @@ class H12BulletTimeSceneCfg_TOF(InteractiveSceneCfg):
     Projectile = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Projectile",
         spawn=sim_utils.SphereCfg(
-            radius=0.075,  
+            radius=_projectile_radius,  
             visual_material=sim_utils.PreviewSurfaceCfg(
                 diffuse_color=(0.0, 0.0, 0.2),  # Blue
                 metallic=0.2,
@@ -99,7 +99,7 @@ for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
         relative_sensor_quat=sensor_orientations,
         debug_vis=False,
         max_range=4.0,  # meters
-        sensor_fov_radius=_projectile_radius,
+        projectile_radius=_projectile_radius,  # FOV radius matching projectile size
     )
     
     # Add it as a class attribute
@@ -313,6 +313,12 @@ class EventCfg:
         },
     )
 
+    # Debug: log TOF readings at reset to verify sensors
+    log_tof = EventTerm(
+        func=local_mdp.print_tof_readings,
+        mode="reset",
+        params={},
+    )
 
 @configclass
 class CurriculumCfg:

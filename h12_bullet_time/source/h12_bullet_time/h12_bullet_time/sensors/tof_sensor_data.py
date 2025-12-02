@@ -70,10 +70,10 @@ class TofSensorData:
     """
 
     tof_distances: torch.Tensor = None
-    """Simulated TOF distances of each sensor.
+    """Simulated TOF distances for each pixel of each sensor.
 
-    Shape is (N, S, M), where N is the number of environments, S is the number of sensors,
-    and M is the number of target frames.
+    Shape is (N, S, M, P), where N is the number of environments, S is the number of sensors,
+    M is the number of target frames, and P is pixel_count^2 (flattened grid).
 
-    Returns NaN if no target sphere is intersecting with the sensor range.
+    Returns NaN if no target sphere is intersecting with the sensor pixel's ray.
     """

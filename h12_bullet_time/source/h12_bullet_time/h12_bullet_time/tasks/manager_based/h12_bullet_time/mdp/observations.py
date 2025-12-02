@@ -90,7 +90,23 @@ def tof_distances_obs(
     max_range: float = 4.0,
     handle_nan: str = "replace_with_max",
 ) -> torch.Tensor:
-
+    """TOF sensor distance readings aggregated across all sensors.
+    
+    Accesses sensor.data property which triggers automatic updates via SensorBase._update_outdated_buffers().
+    This is the standard IsaacLab pattern for lazy-evaluated sensor data.
+    
+    Args:
+        env: Environment instance
+        max_range: Maximum range of TOF sensors (used for normalization)
+        handle_nan: How to handle NaN values:
+            - "replace_with_max": Replace NaN with max_range
+            - "zero": Replace NaN with 0
+            - "keep": Keep NaN values as-is
+        
+    Returns:
+        Flattened TOF sensor distances (num_envs, total_num_measurements)
+        Normalized by max_range so values are in [0, 1]
+    """
     # Check if environment has sensors
     if not hasattr(env.scene, "sensors") or len(env.scene.sensors) == 0:
         # No sensors in scene, return empty tensor
@@ -100,14 +116,32 @@ def tof_distances_obs(
     # Collect distances from all sensors
     all_distances = []
     
-    for sensor in env.scene.sensors:
-        # Try to get TOF distance data
-        if hasattr(sensor, "data") and hasattr(sensor.data, "distances"):
-            distances = sensor.data.distances  # Shape: (num_envs, num_frames, num_targets)
+    # env.scene.sensors is a list of sensor names (strings)
+    for sensor_name in env.scene.sensors:
+        # Get the actual sensor object from the scene
+        try:
+            sensor = env.scene[sensor_name]
+            sensor_data = sensor.data
             
-            # Flatten each sensor's measurements
+            # Try tof_distances first (preferred, includes FOV-based culling)
+            if hasattr(sensor_data, "tof_distances"):
+                distances = sensor_data.tof_distances  # Shape: (num_envs, num_sensors, num_targets)
+            # Fallback to raw_target_distances
+            elif hasattr(sensor_data, "raw_target_distances"):
+                distances = sensor_data.raw_target_distances
+            # Final fallback to distances attribute
+            elif hasattr(sensor_data, "distances"):
+                distances = sensor_data.distances
+            else:
+                # Skip this sensor if it has no distance data
+                continue
+            
+            # Flatten each sensor's measurements: (num_envs, num_sensors, num_targets) -> (num_envs, flattened)
             distances_flat = distances.reshape(distances.shape[0], -1)  # (num_envs, flattened_dims)
             all_distances.append(distances_flat)
+        except Exception:
+            # Skip sensors that fail to access data
+            continue
     
     if not all_distances:
         # No valid sensor data found, return empty tensor

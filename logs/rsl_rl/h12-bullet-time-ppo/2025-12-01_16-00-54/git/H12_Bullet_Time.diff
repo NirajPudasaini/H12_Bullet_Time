@@ -1,0 +1,143 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+	modified:   h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-01_16-00-00/
+	logs/rsl_rl/h12-bullet-time-ppo/2025-12-01_16-00-54/
+	outputs/2025-12-01/15-59-59/
+	outputs/2025-12-01/16-00-54/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+index 2279d91..a90267a 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/h12_bullet_time_env_cfg_tof.py
+@@ -313,6 +313,13 @@ class EventCfg:
+         },
+     )
+ 
++    # Debug: log TOF readings at reset to verify sensors
++    log_tof = EventTerm(
++        func=local_mdp.print_tof_readings,
++        mode="reset",
++        params={},
++    )
++
+ 
+ @configclass
+ class CurriculumCfg:
+diff --git a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+index e5135f0..1b85f7e 100644
+--- a/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
++++ b/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/tasks/manager_based/h12_bullet_time/mdp/events.py
+@@ -145,3 +145,99 @@ def launch_projectile_curriculum(
+ #         except (IndexError, RuntimeError):
+ #             # If action tensor shape is different, silently skip
+ #             pass
++
++
++def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = None) -> None:
++    """Debug helper: print a compact summary of TOF sensor readings.
++
++    Prints shapes, number of valid detections and a few sample values for the
++    first environment index (or the first index in env_ids if provided).
++    """
++    try:
++        sensors = getattr(env.scene, "sensors", None)
++    except Exception:
++        sensors = None
++
++    if not sensors:
++        print("[TOF DEBUG] No sensors found in scene.")
++        return
++
++    # choose environment index to inspect
++    env_idx = 0
++    if env_ids is not None:
++        try:
++            if isinstance(env_ids, torch.Tensor) and env_ids.numel() > 0:
++                env_idx = int(env_ids.flatten()[0].item())
++            elif isinstance(env_ids, (list, tuple)) and len(env_ids) > 0:
++                env_idx = int(env_ids[0])
++            else:
++                env_idx = int(env_ids)
++        except Exception:
++            env_idx = 0
++
++    # Print header
++    print(f"[TOF DEBUG] Env {env_idx}: {len(sensors)} sensor(s) present")
++
++    for s_idx, sensor in enumerate(sensors):
++        data = getattr(sensor, "data", None)
++        if data is None:
++            print(f"  Sensor[{s_idx}]: no data")
++            continue
++
++        # prefer tof_distances, fall back to raw_target_distances or distances
++        tof = None
++        for attr in ("tof_distances", "raw_target_distances", "distances", "target_distances"):
++            if hasattr(data, attr):
++                tof = getattr(data, attr)
++                break
++
++        if tof is None:
++            print(f"  Sensor[{s_idx}]: no distance attribute found")
++            continue
++
++        try:
++            # Ensure tensor on CPU for printing (handle numpy arrays too)
++            if hasattr(tof, "cpu"):
++                arr = tof.cpu()
++            else:
++                import numpy as _np
++
++                arr = _np.asarray(tof)
++
++            # arr expected shape: (num_envs, num_sensors, num_targets) or similar
++            if hasattr(arr, "numpy"):
++                # torch tensor
++                vals = arr.numpy()
++            else:
++                vals = arr
++
++            # Extract env slice
++            if vals.ndim == 0:
++                print(f"  Sensor[{s_idx}]: scalar={vals}")
++                continue
++
++            if vals.shape[0] <= env_idx:
++                print(f"  Sensor[{s_idx}]: env index {env_idx} out of range (shape {vals.shape})")
++                continue
++
++            slice_env = vals[env_idx]
++
++            # Flatten and compute stats
++            flat = slice_env.flatten()
++            import numpy as _np
++
++            nan_count = int(_np.isnan(flat).sum()) if _np.isnan(flat).any() else 0
++            valid_count = flat.size - nan_count
++            mean_val = float(_np.nanmean(flat)) if valid_count > 0 else float("nan")
++            sample_vals = flat[:8]
++
++            print(f"  Sensor[{s_idx}]: shape={vals.shape}, valid={valid_count}, nans={nan_count}, mean={mean_val:.3f}")
++            print("    samples:", ", ".join([f"{float(x):.3f}" if not _np.isnan(x) else "nan" for x in sample_vals]))
++        except Exception as e:
++            print(f"  Sensor[{s_idx}]: failed to read data: {e}")
++
++    # flush stdout to ensure visibility in logs
++    try:
++        sys.stdout.flush()
++    except Exception:
++        pass

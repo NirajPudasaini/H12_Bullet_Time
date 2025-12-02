@@ -145,3 +145,106 @@ def launch_projectile_curriculum(
 #         except (IndexError, RuntimeError):
 #             # If action tensor shape is different, silently skip
 #             pass
+
+
+def print_tof_readings(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = None) -> None:
+    """Debug helper: print a compact summary of TOF sensor readings.
+
+    Prints shapes, number of valid detections and a few sample values for the
+    first environment index (or the first index in env_ids if provided).
+    """
+    try:
+        sensor_names = getattr(env.scene, "sensors", None)
+    except Exception:
+        sensor_names = None
+
+    if not sensor_names:
+        print("[TOF DEBUG] No sensors found in scene.")
+        return
+
+    # choose environment index to inspect
+    env_idx = 0
+    if env_ids is not None:
+        try:
+            if isinstance(env_ids, torch.Tensor) and env_ids.numel() > 0:
+                env_idx = int(env_ids.flatten()[0].item())
+            elif isinstance(env_ids, (list, tuple)) and len(env_ids) > 0:
+                env_idx = int(env_ids[0])
+            else:
+                env_idx = int(env_ids)
+        except Exception:
+            env_idx = 0
+
+    # Print header
+    print(f"[TOF DEBUG] Env {env_idx}: {len(sensor_names)} sensor(s) present")
+
+    for s_idx, sensor_name in enumerate(sensor_names):
+        # Get the actual sensor object from the scene
+        try:
+            sensor = env.scene[sensor_name]
+            data = sensor.data
+        except Exception as e:
+            print(f"  Sensor[{s_idx}] ({sensor_name}): failed to access data: {e}")
+            continue
+
+        if data is None:
+            print(f"  Sensor[{s_idx}] ({sensor_name}): no data")
+            continue
+
+        # prefer tof_distances, fall back to raw_target_distances or distances
+        tof = None
+        for attr in ("tof_distances", "raw_target_distances", "distances", "target_distances"):
+            if hasattr(data, attr):
+                tof = getattr(data, attr)
+                break
+
+        if tof is None:
+            print(f"  Sensor[{s_idx}] ({sensor_name}): no distance attribute found")
+            continue
+
+        try:
+            # Ensure tensor on CPU for printing (handle numpy arrays too)
+            if hasattr(tof, "cpu"):
+                arr = tof.cpu()
+            else:
+                import numpy as _np
+
+                arr = _np.asarray(tof)
+
+            # arr expected shape: (num_envs, num_sensors, num_targets) or similar
+            if hasattr(arr, "numpy"):
+                # torch tensor
+                vals = arr.numpy()
+            else:
+                vals = arr
+
+            # Extract env slice
+            if vals.ndim == 0:
+                print(f"  Sensor[{s_idx}] ({sensor_name}): scalar={vals}")
+                continue
+
+            if vals.shape[0] <= env_idx:
+                print(f"  Sensor[{s_idx}] ({sensor_name}): env index {env_idx} out of range (shape {vals.shape})")
+                continue
+
+            slice_env = vals[env_idx]
+
+            # Flatten and compute stats
+            flat = slice_env.flatten()
+            import numpy as _np
+
+            nan_count = int(_np.isnan(flat).sum()) if _np.isnan(flat).any() else 0
+            valid_count = flat.size - nan_count
+            mean_val = float(_np.nanmean(flat)) if valid_count > 0 else float("nan")
+            sample_vals = flat[:8]
+
+            print(f"  Sensor[{s_idx}] ({sensor_name}): shape={vals.shape}, valid={valid_count}, nans={nan_count}, mean={mean_val:.3f}")
+            print("    samples:", ", ".join([f"{float(x):.3f}" if not _np.isnan(x) else "nan" for x in sample_vals]))
+        except Exception as e:
+            print(f"  Sensor[{s_idx}] ({sensor_name}): failed to read data: {e}")
+
+    # flush stdout to ensure visibility in logs
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
