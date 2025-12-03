@@ -19,10 +19,11 @@ def launch_projectile(
 )-> None:
 
     # Parameters (defaults chosen to spawn relative to torso link)
-    spawn_distance = 1.5
-    height_offset = 0.85
-    throw_speed = 5.0
+    spawn_distance = 2.0
+    height_offset = 0.9
+    throw_speed = 7.0
     offset_range_x = 1.0
+    offset_range_y = 0.2
     offset_range_z = 0.1
     # Randomization: allow +/-20% variation on spawn_distance and height_offset per env
     var_frac = 0.2  # 20%
@@ -53,6 +54,7 @@ def launch_projectile(
     # Random offsets
     # x_offset only to the right: sample in [0, offset_range_x]
     x_offset = torch.rand((n,), device=device, dtype=torch.float32) * offset_range_x
+    y_offset = torch.rand((n,), device=device, dtype=torch.float32) * offset_range_y
     z_offset = torch.rand((n,), device=device, dtype=torch.float32) * 2 * offset_range_z - offset_range_z
 
     # Per-env random scaling in [1-0.2, 1+0.2]
@@ -65,7 +67,7 @@ def launch_projectile(
     spawn_pos = torch.zeros((n, 3), device=device, dtype=torch.float32)
     # apply per-env spawn distance and height offset with random +/-20% variation
     spawn_pos[:, 0] = center[:, 0] + spawn_distance_per_env + x_offset
-    spawn_pos[:, 1] = center[:, 1]
+    spawn_pos[:, 1] = center[:, 1] + y_offset
     spawn_pos[:, 2] = center[:, 2] + height_offset_per_env + z_offset
 
     # Identity quaternion
@@ -83,15 +85,117 @@ def launch_projectile(
 
     proj.write_root_pose_to_sim(pose, env_ids)
     proj.write_root_velocity_to_sim(velocity, env_ids)
-    # Debug print: show spawn info for the envs we updated
-    # try:
-    #     sp = spawn_pos.cpu().numpy()
-    #     lv = lin_vel.cpu().numpy()
-    #     ids = env_ids.cpu().numpy()
-    #     print(f"[launch_projectile] env_ids={ids.tolist()}, spawn_pos={sp.tolist()}, lin_vel={lv.tolist()}")
-    # except Exception:
-    #     # Fallback safe print if tensors are not CPU-accessible
-    #     print(f"[launch_projectile] spawned projectiles for env_ids={env_ids}")
+
+
+def launch_projectile_radial(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("Projectile"),
+) -> None:
+    """Launch projectile with parabolic arc from any direction around the robot.
+    
+    Automatically calculates the launch angle so the projectile impacts the torso
+    at 75% of its trajectory (on the descending arc), creating a dramatic
+    arcing approach from any direction.
+    
+    Physics:
+        For a projectile hitting at fraction f of its flight time:
+        - tan(θ) = Δz / (d * (1 - f))  where θ is elevation angle
+        - v = sqrt(d * g / (f * sin(2θ)))  where v is launch speed
+    """
+    # Parameters
+    spawn_distance = 1.2        # Horizontal distance from robot (1.2 worked great!)
+    spawn_height = 0.2          # Low spawn height (so projectile arcs upward)
+    gravity = 9.81              # Gravity magnitude
+    trajectory_fraction = 0.8  # Hit target at 75% of trajectory
+    var_frac = 0.2              # +/-20% variation
+    offset_range_z = 0.15       # Random offset on target height
+
+    # Get projectile and robot from scene
+    proj = env.scene[asset_cfg.name]
+    robot = env.scene["robot"]
+
+    # Try to get body link positions; fall back to root if not available
+    try:
+        body_names = list(robot.body_names)
+    except Exception:
+        body_names = []
+
+    root_pos = robot.data.root_pos_w  # (num_envs, 3)
+    device = root_pos.device
+
+    # Target XY position (robot center)
+    target_xy = root_pos[env_ids, :2]
+
+    # Target height: use torso if available, otherwise root + offset
+    if "torso" in body_names:
+        idx = body_names.index("torso")
+        target_z = robot.data.body_pos_w[env_ids, idx, 2]
+    else:
+        target_z = root_pos[env_ids, 2] + 1.3  # Default torso height offset
+
+    n = env_ids.numel()
+
+    # Random azimuth angle: spawn from any direction around the robot [0, 2π)
+    azimuth = torch.rand((n,), device=device, dtype=torch.float32) * 2.0 * math.pi
+
+    # Per-env randomization on distance
+    sd_scale = 1.0 + (torch.rand((n,), device=device, dtype=torch.float32) * 2.0 * var_frac - var_frac)
+    spawn_distance_per_env = spawn_distance * sd_scale
+
+    # Random offset on target height
+    z_offset = (torch.rand((n,), device=device, dtype=torch.float32) * 2 - 1) * offset_range_z
+    target_z = target_z + z_offset
+
+    # Spawn position: on a circle around the robot, at low height
+    spawn_pos = torch.zeros((n, 3), device=device, dtype=torch.float32)
+    spawn_pos[:, 0] = target_xy[:, 0] + torch.cos(azimuth) * spawn_distance_per_env
+    spawn_pos[:, 1] = target_xy[:, 1] + torch.sin(azimuth) * spawn_distance_per_env
+    spawn_pos[:, 2] = spawn_height
+
+    # Calculate launch parameters for impact at 75% of trajectory
+    d = spawn_distance_per_env                      # horizontal distance to target
+    delta_z = target_z - spawn_height               # vertical displacement (target - spawn)
+
+    # Elevation angle from trajectory constraint:
+    # For hitting at fraction f of flight time: tan(θ) = Δz / (d * (1 - f))
+    one_minus_f = 1.0 - trajectory_fraction  # = 0.25 for f=0.75
+    elevation = torch.atan2(delta_z, d * one_minus_f)
+
+    # Clamp elevation to reasonable range [15°, 75°] to avoid extreme trajectories
+    min_elev = math.radians(15)
+    max_elev = math.radians(75)
+    elevation = torch.clamp(elevation, min_elev, max_elev)
+
+    # Launch speed from trajectory constraint:
+    # v = sqrt(d * g / (f * sin(2θ)))
+    sin_2theta = torch.sin(2 * elevation)
+    sin_2theta = torch.clamp(sin_2theta, min=0.1)  # Avoid division by zero
+    speed = torch.sqrt(d * gravity / (trajectory_fraction * sin_2theta))
+
+    # Velocity components
+    # Horizontal: toward target (opposite of azimuth direction from spawn)
+    # Vertical: upward at calculated elevation angle
+    cos_elev = torch.cos(elevation)
+    sin_elev = torch.sin(elevation)
+
+    lin_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
+    lin_vel[:, 0] = -torch.cos(azimuth) * speed * cos_elev  # toward robot in X
+    lin_vel[:, 1] = -torch.sin(azimuth) * speed * cos_elev  # toward robot in Y
+    lin_vel[:, 2] = speed * sin_elev                        # upward
+
+    # Identity quaternion
+    quats = torch.zeros((n, 4), device=device, dtype=torch.float32)
+    quats[:, 0] = 1.0
+
+    ang_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
+
+    pose = torch.cat([spawn_pos, quats], dim=-1)
+    velocity = torch.cat([lin_vel, ang_vel], dim=-1)
+
+    proj.write_root_pose_to_sim(pose, env_ids)
+    proj.write_root_velocity_to_sim(velocity, env_ids)
+
 
 
 def launch_projectile_curriculum(

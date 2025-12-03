@@ -11,10 +11,10 @@ import torch
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from isaacsim.core.simulation_manager import SimulationManager
 from pxr import UsdPhysics
 
 import isaaclab.sim as sim_utils
-from isaaclab.sim import SimulationContext
 import isaaclab.utils.string as string_utils
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.utils.math import (
@@ -27,26 +27,42 @@ from isaaclab.utils.math import (
 )
 
 from isaaclab.sensors import SensorBase
-from .tof_sensor_data import TofSensorData
+from .capacitive_sensor_data import CapacitiveSensorData
 
 if TYPE_CHECKING:
-    from .tof_sensor_cfg import TofSensorCfg
+    from .capacitive_sensor_cfg import CapacitiveSensorCfg
 
 # import logger
 logger = logging.getLogger(__name__)
 
 
-class TofSensor(SensorBase):
-    """
-    Modification of the FrameTransformer
-    This is only intended for spherical projectile detection.
+class CapacitiveSensor(SensorBase):
+    """A sensor for reporting frame transforms.
+
+    This class provides an interface for reporting the transform of one or more frames (target frames)
+    with respect to another frame (source frame). The source frame is specified by the user as a prim path
+    (:attr:`CapacitiveSensorCfg.prim_path`) and the target frames are specified by the user as a list of
+    prim paths (:attr:`CapacitiveSensorCfg.target_frames`).
+
+    The source frame and target frames are assumed to be rigid bodies. The transform of the target frames
+    with respect to the source frame is computed by first extracting the transform of the source frame
+    and target frames from the physics engine and then computing the relative transform between the two.
+
+    Additionally, the user can specify an offset for the source frame and each target frame. This is useful
+    for specifying the transform of the desired frame with respect to the body's center of mass, for instance.
+
+    A common example of using this sensor is to track the position and orientation of the end effector of a
+    robotic manipulator. In this case, the source frame would be the body corresponding to the base frame of the
+    manipulator, and the target frame would be the body corresponding to the end effector. Since the end-effector is
+    typically a fictitious body, the user may need to specify an offset from the end-effector to the body of the
+    manipulator.
 
     """
 
-    cfg: TofSensorCfg
+    cfg: CapacitiveSensorCfg
     """The configuration parameters."""
 
-    def __init__(self, cfg: TofSensorCfg):
+    def __init__(self, cfg: CapacitiveSensorCfg):
         """Initializes the frame transformer object.
 
         Args:
@@ -55,12 +71,12 @@ class TofSensor(SensorBase):
         # initialize base class
         super().__init__(cfg)
         # Create empty variables for storing output data
-        self._data: TofSensorData = TofSensorData()
+        self._data: CapacitiveSensorData = CapacitiveSensorData()
 
     def __str__(self) -> str:
         """Returns: A string containing information about the instance."""
         return (
-            f"TofSensor @ '{self.cfg.prim_path}': \n"
+            f"CapacitiveSensor @ '{self.cfg.prim_path}': \n"
             f"\ttracked body frames: {[self._source_frame_body_name] + self._target_frame_body_names} \n"
             f"\tnumber of envs: {self._num_envs}\n"
             f"\tsource body frame: {self._source_frame_body_name}\n"
@@ -72,7 +88,7 @@ class TofSensor(SensorBase):
     """
 
     @property
-    def data(self) -> TofSensorData:
+    def data(self) -> CapacitiveSensorData:
         # update sensors if needed
         self._update_outdated_buffers()
         # return the data
@@ -232,10 +248,8 @@ class TofSensor(SensorBase):
 
         body_names_regex = [tracked_prim_path.replace("env_0", "env_*") for tracked_prim_path in tracked_prim_paths]
 
-        # obtain global simulation view from context
-        from isaaclab.sim import SimulationContext
-        sim_context = SimulationContext.instance()
-        self._physics_sim_view = sim_context.physics_sim_view
+        # obtain global simulation view
+        self._physics_sim_view = SimulationManager.get_physics_sim_view()
         # Create a prim view for all frames and initialize it
         # order of transforms coming out of view will be source frame followed by target frame(s)
         self._frame_physx_view = self._physics_sim_view.create_rigid_body_view(body_names_regex)
@@ -308,8 +322,6 @@ class TofSensor(SensorBase):
         # when updating sensor in _update_buffers_impl
         duplicate_frame_indices = []
 
-        self.make_grid()
-
         # Go through each body name and determine the number of duplicates we need for that frame
         # and extract the offsets. This is all done to handle the case where multiple frames
         # reference the same body, but have different names and/or offsets
@@ -340,18 +352,9 @@ class TofSensor(SensorBase):
             self._target_frame_offset_pos = torch.stack(target_frame_offset_pos).repeat(self._num_envs, 1)
             self._target_frame_offset_quat = torch.stack(target_frame_offset_quat).repeat(self._num_envs, 1)
 
-        # Append the relative sensor positions and orientations to the source frame offset tensor
+        # Append the relative sensor positions to the source frame offset tensor
         self._relative_sensor_pos = torch.tensor(self.cfg.relative_sensor_pos, device=self.device)
         self._num_sensors = len(self.cfg.relative_sensor_pos)
-        
-        # Handle sensor orientations - expand to match number of sensors if only default provided
-        if len(self.cfg.relative_sensor_quat) == 1 and self._num_sensors > 1:
-            # Repeat the single quaternion for all sensors
-            self._relative_sensor_quat = torch.tensor(
-                self.cfg.relative_sensor_quat * self._num_sensors, device=self.device
-            ).view(self._num_sensors, 4)
-        else:
-            self._relative_sensor_quat = torch.tensor(self.cfg.relative_sensor_quat, device=self.device)
 
         # fill the data buffer
         self._data.target_frame_names = self._target_frame_names
@@ -361,19 +364,17 @@ class TofSensor(SensorBase):
         self._data.target_quat_w = torch.zeros(self._num_envs, len(duplicate_frame_indices), 4, device=self._device)
         self._data.target_pos_source = torch.zeros_like(self._data.target_pos_w)
         self._data.target_quat_source = torch.zeros_like(self._data.target_quat_w)
-        self._data.raw_target_distances = torch.zeros(
+        self._data.target_distances = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
         )
         self._data.target_pos_sensor = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), 3, device=self._device
         )
-        self._data.tof_distances = torch.zeros(
-            self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
-            dtype=torch.float32, device=self._device
+        self._data.capacitance_values = torch.zeros(
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
         )
         self._data.dist_est_normalized = torch.zeros(
-            self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
-            dtype=torch.float32, device=self._device
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
         )
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
@@ -431,71 +432,21 @@ class TofSensor(SensorBase):
             target_pos_w,
             target_quat_w,
         )
-        
-        # Reshape back to proper batch dimensions: (N*M, 3) -> (N, M, 3)
-        num_envs = source_pos_w.shape[0]
-        target_pos_source = target_pos_source.reshape(num_envs, total_num_frames, 3)
-        target_quat_source = target_quat_source.reshape(num_envs, total_num_frames, 4)
 
         # Compute the normalized distances of the target frame(s) relative to the source frame
-        # Target pos in source frame: (N, M, 3) -> (N, 1, M, 3)
+        # Target pos in source frame: (N*M, 3) -> (N, M, 3) -> (N, 1, M, 3)
         # Relative sensor pos: (S, 3) -> (1, S, 1, 3)
-        target_pos_sensor = target_pos_source.unsqueeze(1) - self._relative_sensor_pos.view(
+        target_pos_sensor = target_pos_source.view(-1, total_num_frames, 3).unsqueeze(1) - self._relative_sensor_pos.view(
             1, self._num_sensors, 1, 3
         )
-        raw_target_distances = torch.linalg.norm(target_pos_sensor, dim=-1)
+        distances = torch.linalg.norm(target_pos_sensor, dim=-1) - self.cfg.projectile_radius
 
-        ############### TOF simulation ###############
-        # Multi-pixel ToF: each sensor has a pixel_count x pixel_count grid of rays
-        # Shapes: N=envs, S=sensors, M=targets, P=pixel_count^2
-        
-        P = self.cfg.pixel_count ** 2
-        
-        # Get base sensor forward directions: (S, 3)
-        z_axis = torch.tensor([0.0, 0.0, 1.0], device=self.device)
-        sensor_forward_base = self._quat_rotate_vec(self._relative_sensor_quat, z_axis)
-        
-        # Apply grid rotations to get ray directions for each pixel: (S, P, 3)
-        # _grid_quats: (P, 4) -> broadcast with sensor_forward_base: (S, 1, 3)
-        sensor_forward_base_exp = sensor_forward_base.unsqueeze(1).expand(-1, P, -1)  # (S, P, 3)
-        grid_quats_exp = self._grid_quats.unsqueeze(0).expand(self._num_sensors, -1, -1)  # (S, P, 4)
-        ray_dirs = self._quat_rotate_vec(grid_quats_exp, sensor_forward_base_exp)  # (S, P, 3)
-        
-        # Expand target_pos_sensor for pixel dimension: (N, S, M, 3) -> (N, S, M, 1, 3)
-        target_pos_exp = target_pos_sensor.unsqueeze(-2)  # (N, S, M, 1, 3)
-        
-        # Expand ray_dirs for batch/target dims: (S, P, 3) -> (1, S, 1, P, 3)
-        ray_dirs_exp = ray_dirs.unsqueeze(0).unsqueeze(2)  # (1, S, 1, P, 3)
-        
-        # Projection of target onto each ray direction (depth along ray): (N, S, M, P)
-        proj_z = torch.sum(ray_dirs_exp * target_pos_exp, dim=-1)
-        
-        # Perpendicular distance from each ray axis: (N, S, M, P)
-        proj_vec = proj_z.unsqueeze(-1) * ray_dirs_exp  # (N, S, M, P, 3)
-        perpendicular_vec = target_pos_exp - proj_vec    # (N, S, M, P, 3)
-        perpendicular_dist = torch.linalg.norm(perpendicular_vec, dim=-1)  # (N, S, M, P)
-        
-        # Expand normalized_distances for pixel dimension: (N, S, M) -> (N, S, M, P)
-        # Clamp ratio to [-1, 1] to avoid NaN from acos when perpendicular_dist > projectile_radius
-        acos_arg = torch.clamp(perpendicular_dist / self.cfg.projectile_radius, -1.0, 1.0)
-        sphere_offset = self.cfg.projectile_radius * torch.sin(torch.acos(acos_arg))  # offset = r*sin(theta), where theta = acos(perpendicular_dist/r)
-        raw_target_distances_exp = raw_target_distances.unsqueeze(-1).expand(-1, -1, -1, P)
-        final_distances = raw_target_distances_exp - sphere_offset
-        
-        # Detection conditions per pixel
-        in_front = proj_z > 0
-        within_fov = perpendicular_dist <= self.cfg.projectile_radius
-        within_range = raw_target_distances_exp <= self.cfg.max_range
-        
-        # ToF distance per pixel: (N, S, M, P)
-        tof_distances = torch.where(
-            in_front & within_fov & within_range,
-            final_distances,
-            torch.full_like(raw_target_distances_exp, self.cfg.max_range)
-        )
+        ############### Capacitance simulation ###############
 
-        # Normalize distances - use the masked tof_distances to avoid NaN from acos domain issues
-        dist_est_normalized = tof_distances / self.cfg.max_range
+        # Extremely basic and non-realistic linear sensor: Just used for debugging.
+        capacitance_values = torch.clamp(-(1/self.cfg.max_range) * distances + 1, min=0.0) * self.cfg.max_SNR
+        dist_est_normalized = torch.where(distances <= self.cfg.max_range, distances / self.cfg.max_range, torch.ones_like(distances))
+
 
         ######################################################
 
@@ -507,41 +458,12 @@ class TofSensor(SensorBase):
         self._data.target_quat_w[:] = target_quat_w.view(-1, total_num_frames, 4)
         self._data.target_pos_source[:] = target_pos_source.view(-1, total_num_frames, 3)
         self._data.target_quat_source[:] = target_quat_source.view(-1, total_num_frames, 4)
-        self._data.raw_target_distances[:] = raw_target_distances
+        self._data.target_distances[:] = distances
         self._data.target_pos_sensor[:] = target_pos_sensor
-        self._data.tof_distances[:] = tof_distances
+        self._data.capacitance_values[:] = capacitance_values
         self._data.dist_est_normalized[:] = dist_est_normalized
 
-    def make_grid(self):
-        """Create quaternions representing ray directions for each pixel in the sensor grid.
-        
-        Output shape: (pixel_count^2, 4) - flattened grid of rotation quaternions.
-        Each quaternion rotates the center ray to a pixel's ray direction.
-        """
-        fov_angle = self.cfg.fov_deg * (torch.pi / 180.0)
-        half_fov = fov_angle / 2.0
-        P = self.cfg.pixel_count
-        
-        # Create grid of angles (X=yaw around Y-axis, Y=pitch around X-axis)
-        angles_x = torch.linspace(-half_fov, half_fov, P, device=self.device)
-        angles_y = torch.linspace(half_fov, -half_fov, P, device=self.device)
-        grid_X, grid_Y = torch.meshgrid(angles_x, angles_y, indexing='xy')
-        
-        # Flatten to (P^2,)
-        ax = grid_X.reshape(-1)
-        ay = grid_Y.reshape(-1)
-        
-        # Build rotation quaternions: yaw (around Y), then pitch (around X)
-        x_axis = torch.tensor([1.0, 0.0, 0.0], device=self.device).expand(P * P, -1)
-        y_axis = torch.tensor([0.0, 1.0, 0.0], device=self.device).expand(P * P, -1)
-        
-        quat_yaw = quat_from_angle_axis(ax, y_axis)    # (P^2, 4)
-        quat_pitch = quat_from_angle_axis(ay, x_axis)  # (P^2, 4)
-        
-        # Combined rotation: pitch after yaw -> q_pitch * q_yaw
-        self._grid_quats = self._quat_multiply(quat_pitch, quat_yaw)  # (P^2, 4)
 
-    
     def _set_debug_vis_impl(self, debug_vis: bool):
         # set visibility of markers
         # note: parent only deals with callbacks. not their visibility
@@ -556,100 +478,70 @@ class TofSensor(SensorBase):
                 self.frame_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        """Visualize sensor ray directions as lines for each pixel in the grid.
-        
-        Only shows lines when an object is detected (distance < max_range),
-        and the line length matches the actual reported distance.
-        """
-        
-        N, S, M, P = self._num_envs, self._num_sensors, len(self._target_frame_names), self.cfg.pixel_count ** 2
-        
-        # Get the TOF distances: (N, S, M, P)
-        tof_distances = self._data.tof_distances
-        
-        # Detection mask: only show rays that detected something (distance < max_range)
-        detection_mask = tof_distances < self.cfg.max_range  # (N, S, M, P)
-        
-        # Early exit if nothing detected
-        if not detection_mask.any():
+        # Calculate sensor world positions for visualization
+        # source_pos_w: (N, 3) -> (N*S, 3)
+        source_pos_expanded = self._data.source_pos_w.repeat_interleave(self._num_sensors, dim=0)
+        source_quat_expanded = self._data.source_quat_w.repeat_interleave(self._num_sensors, dim=0)
+        # relative_sensor_pos: (S, 3) -> (N*S, 3)
+        sensor_rel_expanded = self._relative_sensor_pos.repeat(self._num_envs, 1)
+        # identity quat for relative sensor offsets
+        sensor_quat_rel = torch.tensor(
+            [1.0, 0.0, 0.0, 0.0], device=self.device
+        ).repeat(self._num_envs * self._num_sensors, 1)
+
+        sensor_pos_w, _ = combine_frame_transforms(
+            source_pos_expanded, source_quat_expanded, sensor_rel_expanded, sensor_quat_rel
+        )
+
+        # Get the all connecting lines between frames pose
+        # Start: Sensor positions. Need to repeat for each target.
+        # sensor_pos_w: (N*S, 3) -> (N, S, 3). Expand to (N, S, M, 3). Flatten.
+        num_targets = self._data.target_pos_w.shape[1]
+        start_pos = sensor_pos_w.view(self._num_envs, self._num_sensors, 3).unsqueeze(2)
+        start_pos = start_pos.expand(-1, -1, num_targets, -1).reshape(-1, 3)
+
+        # End: Target positions. Need to repeat for each sensor.
+        # target_pos_w: (N, M, 3) -> (N, 1, M, 3). Expand to (N, S, M, 3). Flatten.
+        end_pos = self._data.target_pos_w.unsqueeze(1).expand(-1, self._num_sensors, -1, -1).reshape(-1, 3)
+
+        # Get distances for filtering: (N, S, M) -> flatten to match line indices
+        distances = self._data.target_distances.reshape(-1)
+
+        # Filter to only show lines where distance < max_range
+        in_range_mask = distances < self.cfg.max_range
+
+        # Only compute lines for in-range sensor-target pairs
+        if in_range_mask.any():
+            filtered_start_pos = start_pos[in_range_mask]
+            filtered_end_pos = end_pos[in_range_mask]
+
+            lines_pos, lines_quat, lines_length = self._get_connecting_lines(
+                start_pos=filtered_start_pos,
+                end_pos=filtered_end_pos,
+            )
+
+            # Initialize scales and marker indices for line markers only (no frame axes)
+            marker_scales = torch.ones(lines_pos.size(0), 3, device=self.device)
+            marker_indices = torch.ones(lines_pos.size(0), device=self.device)  # All lines use marker index 1
+
+            # Set the z-scale of line markers to represent their actual length
+            marker_scales[:, -1] = lines_length
+
+            # Update the visualizer with only lines (no frame axes)
+            self.frame_visualizer.visualize(
+                translations=lines_pos,
+                orientations=lines_quat,
+                scales=marker_scales,
+                marker_indices=marker_indices,
+            )
+        else:
+            # No lines in range - hide all markers by visualizing empty
             self.frame_visualizer.visualize(
                 translations=torch.zeros(0, 3, device=self.device),
                 orientations=torch.zeros(0, 4, device=self.device),
                 scales=torch.zeros(0, 3, device=self.device),
                 marker_indices=torch.zeros(0, device=self.device),
             )
-            return
-        
-        # Calculate sensor world positions and orientations: (N, S, 3/4)
-        source_pos = self._data.source_pos_w.unsqueeze(1)  # (N, 1, 3)
-        source_quat = self._data.source_quat_w.unsqueeze(1)  # (N, 1, 4)
-        sensor_rel_pos = self._relative_sensor_pos.unsqueeze(0)  # (1, S, 3)
-        
-        # Compute sensor world positions (position only, we'll handle rotation separately)
-        sensor_pos_w, _ = combine_frame_transforms(
-            source_pos.expand(-1, S, -1).reshape(-1, 3),
-            source_quat.expand(-1, S, -1).reshape(-1, 4),
-            sensor_rel_pos.expand(N, -1, -1).reshape(-1, 3),
-            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).expand(N * S, 4),  # identity quat for position only
-        )
-        sensor_pos_w = sensor_pos_w.view(N, S, 3)
-        
-        # Compute ray directions matching the sensor computation order:
-        # 1. First rotate z-axis by sensor orientation (in source frame)
-        # 2. Then apply grid rotations
-        # 3. Finally transform to world frame with source orientation
-        
-        z_axis = torch.tensor([0.0, 0.0, 1.0], device=self.device)
-        
-        # Step 1: Sensor forward direction = q_sensor * z  (S, 3)
-        sensor_forward_base = self._quat_rotate_vec(self._relative_sensor_quat, z_axis)
-        
-        # Step 2: Apply grid rotations: q_grid * sensor_forward  (S, P, 3)
-        sensor_forward_exp = sensor_forward_base.unsqueeze(1).expand(-1, P, -1)  # (S, P, 3)
-        grid_quats_exp = self._grid_quats.unsqueeze(0).expand(S, -1, -1)  # (S, P, 4)
-        ray_dirs_source = self._quat_rotate_vec(grid_quats_exp, sensor_forward_exp)  # (S, P, 3) in source frame
-        
-        # Step 3: Transform to world frame: q_source * ray_dirs_source  (N, S, P, 3)
-        source_quat_exp = source_quat.expand(-1, S, -1).unsqueeze(2).expand(-1, -1, P, -1)  # (N, S, P, 4)
-        ray_dirs_source_exp = ray_dirs_source.unsqueeze(0).expand(N, -1, -1, -1)  # (N, S, P, 3)
-        ray_dirs_w_unit = self._quat_rotate_vec(source_quat_exp, ray_dirs_source_exp)  # (N, S, P, 3)
-        
-        # Expand to include target dimension: (N, S, 1, P, 3) -> (N, S, M, P, 3)
-        ray_dirs_w_unit = ray_dirs_w_unit.unsqueeze(2).expand(-1, -1, M, -1, -1)
-        
-        # Scale ray directions by actual detected distances: (N, S, M, P, 3)
-        ray_dirs_scaled = ray_dirs_w_unit * tof_distances.unsqueeze(-1)
-        
-        # Expand sensor positions: (N, S, 3) -> (N, S, M, P, 3)
-        sensor_pos_exp = sensor_pos_w.unsqueeze(2).unsqueeze(3).expand(-1, -1, M, P, -1)
-        
-        # Compute start and end positions: (N, S, M, P, 3)
-        start_pos_all = sensor_pos_exp
-        end_pos_all = sensor_pos_exp + ray_dirs_scaled
-        
-        # Flatten and filter by detection mask
-        start_pos_flat = start_pos_all.reshape(-1, 3)  # (N*S*M*P, 3)
-        end_pos_flat = end_pos_all.reshape(-1, 3)      # (N*S*M*P, 3)
-        detection_mask_flat = detection_mask.reshape(-1)  # (N*S*M*P,)
-        
-        # Filter to only detected rays
-        start_pos_filtered = start_pos_flat[detection_mask_flat]
-        end_pos_filtered = end_pos_flat[detection_mask_flat]
-        
-        # Get line visualization for filtered rays
-        lines_pos, lines_quat, lines_length = self._get_connecting_lines(start_pos_filtered, end_pos_filtered)
-        
-        num_lines = lines_pos.size(0)
-        marker_scales = torch.ones(num_lines, 3, device=self.device)
-        marker_scales[:, 2] = lines_length
-        marker_indices = torch.ones(num_lines, device=self.device, dtype=torch.int32)
-
-        self.frame_visualizer.visualize(
-            translations=lines_pos,
-            orientations=lines_quat,
-            scales=marker_scales,
-            marker_indices=marker_indices,
-        )
 
     """
     Internal simulation callbacks.
@@ -665,44 +557,6 @@ class TofSensor(SensorBase):
     """
     Internal helpers.
     """
-
-    def _quat_rotate_vec(self, quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
-        """Rotate a vector by a quaternion.
-        
-        Args:
-            quat: Quaternion(s) in (w, x, y, z) format. Shape (..., 4)
-            vec: Vector(s) to rotate. Shape (3,) or (..., 3)
-            
-        Returns:
-            Rotated vector(s). Shape (..., 3)
-        """
-        w = quat[..., 0:1]
-        xyz = quat[..., 1:4]
-        
-        if vec.dim() == 1:
-            vec = vec.expand(quat.shape[:-1] + (3,))
-        
-        t = 2.0 * torch.linalg.cross(xyz, vec)
-        return vec + w * t + torch.linalg.cross(xyz, t)
-
-    def _quat_multiply(self, q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
-        """Multiply two quaternions (wxyz format): q1 * q2.
-        
-        Args:
-            q1, q2: Quaternions in (w, x, y, z) format. Shape (..., 4)
-            
-        Returns:
-            Product quaternion. Shape (..., 4)
-        """
-        w1, x1, y1, z1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
-        w2, x2, y2, z2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
-        
-        return torch.stack([
-            w1*w2 - x1*x2 - y1*y2 - z1*z2,
-            w1*x2 + x1*w2 + y1*z2 - z1*y2,
-            w1*y2 - x1*z2 + y1*w2 + z1*x2,
-            w1*z2 + x1*y2 - y1*x2 + z1*w2,
-        ], dim=-1)
 
     def _get_connecting_lines(
         self, start_pos: torch.Tensor, end_pos: torch.Tensor

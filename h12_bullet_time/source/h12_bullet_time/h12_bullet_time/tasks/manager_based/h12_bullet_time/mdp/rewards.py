@@ -6,6 +6,8 @@ from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
 from isaaclab.envs import ManagerBasedRLEnv
+from h12_bullet_time.sensors.capacitive_sensor import CapacitiveSensor
+from h12_bullet_time.sensors.tof_sensor import TofSensor
 
 __all__ = [
     "alive_bonus",
@@ -16,6 +18,7 @@ __all__ = [
     "projectile_distance",
     "torso_pitch_curriculum",
     "torso_pitch_reward",
+    "distances_penalty",
 ]
 
 
@@ -148,6 +151,36 @@ def projectile_hit_penalty(
 
 #     return penalty_tensor
 
+def distances_penalty(
+    env: ManagerBasedRLEnv,
+    proximity_scale: float = -1.0,
+    contact_scale: float = -1000.0,
+    contact_threshold: float = 0.1, #% of sensor range
+) -> torch.Tensor:
+    """Penalize proximity to capacitive sensors. This sums up the proximity to all sensors.
+    """
+
+    
+    num_envs = env.num_envs
+    total_penalty = torch.zeros(num_envs, dtype=torch.float32, device=env.device)
+    
+    # Get sensors from env.scene._sensors dict
+    if hasattr(env.scene, '_sensors') and isinstance(env.scene._sensors, dict):
+        for sensor_name, sensor_obj in env.scene._sensors.items():
+            if isinstance(sensor_obj, CapacitiveSensor) or isinstance(sensor_obj, TofSensor):
+                sensor_data = sensor_obj.data
+                if hasattr(sensor_data, "dist_est_normalized"):
+                    # Shape: (num_envs, num_sensors, num_targets) or similar
+                    normalized_distances = sensor_data.dist_est_normalized
+                    # Proximity = 1 - normalized_distance (1 = touching, 0 = far)
+                    proximity = 1.0 - normalized_distances
+                    # Sum all proximity values per environment
+                    proximity_penalty = proximity.reshape(num_envs, -1).sum(dim=1)*proximity_scale
+                    contact_mask = normalized_distances < contact_threshold
+                    contact_penalty = contact_mask.reshape(num_envs, -1).sum(dim=1).float()*contact_scale
+                    total_penalty += proximity_penalty + contact_penalty
+
+    return total_penalty 
 
 def projectile_proximity_penalty(
     env: ManagerBasedRLEnv,

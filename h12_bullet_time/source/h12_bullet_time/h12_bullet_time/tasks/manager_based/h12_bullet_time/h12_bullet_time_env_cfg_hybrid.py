@@ -4,10 +4,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Environment config with CAP sensor readings integrated for RL training.
+Environment config with TOF and CAP sensor readings integrated for RL training.
 
 Supports ablation studies via environment variables:
-    ABLATION_MAX_RANGE: Override max_range for capacitive sensors (default: 0.15)
+    ABLATION_MAX_RANGE: Override max_range for TOF and CAP sensors (default: 0.15)
     ABLATION_PROJECTILE_RADIUS: Override projectile radius (default: 0.15)
 """
 
@@ -32,27 +32,38 @@ from isaaclab.envs import mdp
 from . import mdp as local_mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 from h12_bullet_time.sensors.capacitive_sensor_cfg import CapacitiveSensorCfg
+from h12_bullet_time.sensors.tof_sensor_cfg import TofSensorCfg
 from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
 
 
 # Default parameter values (can be overridden via environment variables for ablation studies)
 _DEFAULT_PROJECTILE_RADIUS = 0.15
-_DEFAULT_MAX_RANGE = 0.2
+_DEFAULT_MAX_RANGE = 4.0
 _DEFAULT_DEBUG_VIS = True
+_DEFAULT_SENSOR_TYPE = "TOF"
+_DEFAULT_PROXIMITY_SCALE = -0.001
+_DEFAULT_CONTACT_SCALE = -0.1
+_DEFAULT_CONTACT_THRESHOLD = 0.01 # (%) of sensor range
 
 # Read ablation overrides from environment variables
 _projectile_radius = float(os.environ.get("ABLATION_PROJECTILE_RADIUS", _DEFAULT_PROJECTILE_RADIUS))
 _max_range = float(os.environ.get("ABLATION_MAX_RANGE", _DEFAULT_MAX_RANGE))
 _debug_vis = bool(os.environ.get("ABLATION_DEBUG_VIS", _DEFAULT_DEBUG_VIS))
+_sensor_type = os.environ.get("ABLATION_SENSOR_TYPE", _DEFAULT_SENSOR_TYPE)
+_proximity_scale = float(os.environ.get("ABLATION_PROXIMITY_SCALE", _DEFAULT_PROXIMITY_SCALE))
+_contact_scale = float(os.environ.get("ABLATION_CONTACT_SCALE", _DEFAULT_CONTACT_SCALE))
+_contact_threshold = float(os.environ.get("ABLATION_CONTACT_THRESHOLD", _DEFAULT_CONTACT_THRESHOLD))
 
 # Log ablation configuration if any overrides are present
 if any(key.startswith("ABLATION_") for key in os.environ):
-    print(f"[CAP CONFIG] Ablation parameters detected:")
+    print(f"[{_sensor_type.upper()} CONFIG] Ablation parameters detected:")
     print(f"  - max_range: {_max_range} (default: {_DEFAULT_MAX_RANGE})")
     print(f"  - projectile_radius: {_projectile_radius} (default: {_DEFAULT_PROJECTILE_RADIUS})")
     print(f"  - debug_vis: {_debug_vis} (default: {_DEFAULT_DEBUG_VIS})")
-
-
+    print(f"  - sensor_type: {_sensor_type} (default: {_DEFAULT_SENSOR_TYPE})")
+    print(f"  - proximity_scale: {_proximity_scale} (default: {_DEFAULT_PROXIMITY_SCALE})")
+    print(f"  - contact_scale: {_contact_scale} (default: {_DEFAULT_CONTACT_SCALE})")
+    print(f"  - contact_threshold: {_contact_threshold} (default: {_DEFAULT_CONTACT_THRESHOLD})")
 # Extract sensor poses from URDF
 _sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
 
@@ -60,11 +71,11 @@ _sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_pa
 if not _sensor_library:
     import warnings
     warnings.warn(
-        f"[CAP CONFIG] No CAP sensors found in URDF at {H12_CFG_HANDLESS.spawn.asset_path}\n"
-        "Sensors will not be added to scene. Check URDF for CAP marker elements."
+        f"[{_sensor_type.upper()} CONFIG] No {_sensor_type} sensors found in URDF at {H12_CFG_HANDLESS.spawn.asset_path}\n"
+        "Sensors will not be added to scene. Check URDF for {_sensor_type} marker elements."
     )
 else:
-    print(f"[CAP CONFIG] Found {len(_sensor_library)} sensor locations in URDF")
+    print(f"[{_sensor_type.upper()} CONFIG] Found {len(_sensor_library)} sensor locations in URDF")
     for link_path, poses in _sensor_library.items():
         print(f"  - {link_path}: {len(poses)} sensor poses")
 
@@ -73,30 +84,44 @@ else:
 _sensor_configs = {}
 for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
     # Create a valid sensor name
-    sensor_name = f"cap_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
+    sensor_name = f"{_sensor_type.lower()}_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
     
     # Extract positions and orientations from Pose3D objects
     sensor_positions = [pose.pos for pose in sensor_poses]
-    
+    sensor_orientations = [pose.quat for pose in sensor_poses]
+
     # Create the sensor config
-    sensor_cfg = CapacitiveSensorCfg(
-        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
-        target_frames=[
-            CapacitiveSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
-        ],
-        relative_sensor_pos=sensor_positions,
-        debug_vis=_debug_vis,
-        max_range=_max_range,  # meters 
-        projectile_radius=_projectile_radius,
-    )
+    if _sensor_type == "CAP":
+        sensor_cfg = CapacitiveSensorCfg(
+            prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
+            target_frames=[
+                CapacitiveSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
+            ],
+            relative_sensor_pos=sensor_positions,
+            debug_vis=_debug_vis,
+            max_range=_max_range,  # meters 
+            projectile_radius=_projectile_radius,
+        )
+    elif _sensor_type == "TOF":
+        sensor_cfg = TofSensorCfg(
+            prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
+            target_frames=[
+                TofSensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
+            ],
+            relative_sensor_pos=sensor_positions,
+            relative_sensor_quat=sensor_orientations,
+            debug_vis=_debug_vis,
+            max_range=_max_range,  # meters
+            projectile_radius=_projectile_radius,  # FOV radius matching projectile size
+        )
     
     _sensor_configs[sensor_name] = sensor_cfg
-    print(f"[CAP CONFIG] Added sensor: {sensor_name} with {len(sensor_poses)} measurement points")
+    print(f"[{_sensor_type.upper()} CONFIG] Added sensor: {sensor_name} with {len(sensor_poses)} measurement points")
 
 
 @configclass
-class H12BulletTimeSceneCfg_CAP(InteractiveSceneCfg):
-    """Configuration for H12 Bullet Time with CAP sensors."""
+class H12BulletTimeSceneCfg_HYBRID(InteractiveSceneCfg):
+    f"""Configuration for H12 Bullet Time with {_sensor_type.upper()} sensors."""
     # ground plane
     ground = AssetBaseCfg(
         prim_path="/World/ground",
@@ -138,15 +163,17 @@ class H12BulletTimeSceneCfg_CAP(InteractiveSceneCfg):
 
 
 # Now add all sensor configs as class attributes after class is defined
-print(f"[CAP CONFIG] Adding {len(_sensor_configs)} sensors to scene class...")
+print(f"[{_sensor_type.upper()} CONFIG] Adding {len(_sensor_configs)} sensors to scene class...")
 for sensor_name, sensor_cfg in _sensor_configs.items():
-    setattr(H12BulletTimeSceneCfg_CAP, sensor_name, sensor_cfg)
-    print(f"[CAP CONFIG] Successfully added: {sensor_name}")
+    setattr(H12BulletTimeSceneCfg_HYBRID, sensor_name, sensor_cfg)
+    print(f"[{_sensor_type.upper()} CONFIG] Successfully added: {sensor_name}")
 
 # Debug: verify sensors were actually added
-print(f"[CAP CONFIG] Scene class now has these attributes:")
-for attr_name in dir(H12BulletTimeSceneCfg_CAP):
+print(f"[{_sensor_type.upper()} CONFIG] Scene class now has these attributes:")
+for attr_name in dir(H12BulletTimeSceneCfg_HYBRID):
     if 'cap' in attr_name.lower() or 'sensor' in attr_name.lower():
+        print(f"  - {attr_name}")
+    elif 'tof' in attr_name.lower() or 'sensor' in attr_name.lower():
         print(f"  - {attr_name}")
 
 ##
@@ -206,24 +233,9 @@ class ObservationsCfg:
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.2, n_max=0.2))
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         last_action = ObsTerm(func=mdp.last_action)
-        
-        # Projectile observations
-        # projectile_pos_rel = ObsTerm(
-        #     func=local_mdp.projectile_position_relative,
-        #     scale=0.25,
-        # )
-        # projectile_vel = ObsTerm(
-        #     func=local_mdp.projectile_velocity,
-        #     scale=0.1,
-        # )
-        # projectile_dist = ObsTerm(
-        #     func=local_mdp.projectile_distance_obs,
-        #     scale=0.5,
-        # )
-        
-        # CAP sensor readings: distance measurements from each sensor
-        cap_distances_obs = ObsTerm(
-            func=local_mdp.cap_distances_obs,
+
+        distances_obs = ObsTerm(
+            func=local_mdp.distances_obs,
             scale=0.25,
         )
         
@@ -246,23 +258,9 @@ class ObservationsCfg:
         # Privileged info: linear velocity
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
         
-        # Projectile observations
-        # projectile_pos_rel = ObsTerm(
-        #     func=local_mdp.projectile_position_relative,
-        #     scale=0.25,
-        # )
-        # projectile_vel = ObsTerm(
-        #     func=local_mdp.projectile_velocity,
-        #     scale=0.1,
-        # )
-        # projectile_dist = ObsTerm(
-        #     func=local_mdp.projectile_distance_obs,
-        #     scale=0.5,
-        # )
-        
-        # CAP sensor readings: distance measurements from each sensor
-        cap_distances_obs = ObsTerm(
-            func=local_mdp.cap_distances_obs,
+
+        distances_obs = ObsTerm(
+            func=local_mdp.distances_obs,
             scale=0.25,
         )
         
@@ -301,23 +299,10 @@ class RewardsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "scale": 100.0},
     )
 
-    # Phase 2 reward: Projectile avoidance penalty
-    # Starts at weight=0.0, transitions to 1.0 at curriculum milestone
-    # projectile_penalty = RewTerm(
-    #     func=local_mdp.projectile_proximity_penalty,
-    #     weight=1.0,
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot"),
-    #         "projectile_name": "Projectile",
-    #         "max_distance": 3.0,
-    #         "penalty_scale": -30.0,
-    #     },
-    # )
-
-    cap_distances_penalty = RewTerm(
-        func=local_mdp.cap_distances_penalty,
+    distances_penalty = RewTerm(
+        func=local_mdp.distances_penalty,
         weight=5.0,
-        params={"proximity_scale": -0.01, "contact_scale": -1.0, "contact_threshold": 0.1},
+        params={"proximity_scale": _proximity_scale, "contact_scale": _contact_scale, "contact_threshold": _contact_threshold},
     )
 
 @configclass
@@ -392,11 +377,11 @@ class TerminationsCfg:
 ##
 
 @configclass
-class H12BulletTimeEnvCfg_CAP(ManagerBasedRLEnvCfg):
-    """RL environment config with CAP sensor integration."""
+class H12BulletTimeEnvCfg_HYBRID(ManagerBasedRLEnvCfg):
+    """RL environment config with {_sensor_type.upper()} sensor integration."""
     
     # Scene settings
-    scene: H12BulletTimeSceneCfg_CAP = H12BulletTimeSceneCfg_CAP(num_envs=4096, env_spacing=4.0)
+    scene: H12BulletTimeSceneCfg_HYBRID = H12BulletTimeSceneCfg_HYBRID(num_envs=4096, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

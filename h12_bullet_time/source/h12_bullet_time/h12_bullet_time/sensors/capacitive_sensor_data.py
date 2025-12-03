@@ -8,13 +8,13 @@ from dataclasses import dataclass
 
 
 @dataclass
-class TofSensorData:
+class CapacitiveSensorData:
     """Data container for the frame transformer sensor."""
 
     target_frame_names: list[str] = None
     """Target frame names (this denotes the order in which that frame data is ordered).
 
-    The frame names are resolved from the :attr:`TofSensorCfg.FrameCfg.name` field.
+    The frame names are resolved from the :attr:`CapacitiveSensorCfg.FrameCfg.name` field.
     This does not necessarily follow the order in which the frames are defined in the config due to
     the regex matching.
     """
@@ -55,7 +55,7 @@ class TofSensorData:
     Shape is (N, 4), where N is the number of environments.
     """
 
-    raw_target_distances: torch.Tensor = None
+    target_distances: torch.Tensor = None
     """Distances of the target frame(s) relative to each sensor offset.
 
     Shape is (N, S, M), where N is the number of environments, S is the number of sensor offsets,
@@ -69,20 +69,16 @@ class TofSensorData:
     and M is the number of target frames.
     """
 
-    tof_distances: torch.Tensor = None
-    """Simulated TOF distances for each pixel of each sensor.
+    capacitance_values: torch.Tensor = None
+    """simulated capacitance values of each sensor.
 
-    Shape is (N, S, M, P), where N is the number of environments, S is the number of sensors,
-    M is the number of target frames, and P is pixel_count^2 (flattened grid).
-
-    Returns NaN if no target sphere is intersecting with the sensor pixel's ray.
+    Shape is (N, S, M), where N is the number of environments, S is the number of sensors,
+    and M is the number of target frames.
     """
 
     dist_est_normalized: torch.Tensor = None
-    """Normalized TOF distances for each pixel of each sensor.
+    """Estimated normalized distances of the target frame(s) relative to each sensor offset.
 
-    Shape is (N, S, M, P), where N is the number of environments, S is the number of sensors,
-    M is the number of target frames, and P is pixel_count^2 (flattened grid).
-
-    Returns NaN if no target sphere is intersecting with the sensor pixel's ray.
+    Shape is (N, S, M), where N is the number of environments, S is the number of sensors,
+    and M is the number of target frames.
     """

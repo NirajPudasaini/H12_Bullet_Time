@@ -10,23 +10,23 @@ from isaaclab.markers.config import FRAME_MARKER_CFG, VisualizationMarkersCfg
 from isaaclab.utils import configclass
 
 from isaaclab.sensors import FrameTransformerCfg, SensorBaseCfg
-from .tof_sensor import TofSensor
+from .capacitive_sensor import CapacitiveSensor
 
 
-# Line-only marker configuration for TOF sensor visualization (no frame axes)
-TOF_LINE_MARKER_CFG = VisualizationMarkersCfg(
-    prim_path="/Visuals/TofSensor",
+# Line-only marker configuration for capacitive sensor visualization (no frame axes)
+CAPACITIVE_LINE_MARKER_CFG = VisualizationMarkersCfg(
+    prim_path="/Visuals/CapacitiveSensor",
     markers={
         # Placeholder for index 0 (invisible, since we only use index 1 for lines)
         "placeholder": sim_utils.SphereCfg(
             radius=0.001,
             visible=False,
         ),
-        # Index 1: connecting line (shown when detecting an object)
+        # Index 1: connecting line (shown when in range)
         "connecting_line": sim_utils.CylinderCfg(
-            radius=0.002,
+            radius=0.003,
             height=1.0,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.5, 0.0), roughness=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.5), roughness=1.0),
         ),
     }
 )
@@ -43,7 +43,7 @@ class OffsetCfg:
 
 
 @configclass
-class TofSensorCfg(FrameTransformerCfg):
+class CapacitiveSensorCfg(FrameTransformerCfg):
     """Configuration for the frame transformer sensor."""
 
     @configclass
@@ -55,7 +55,7 @@ class TofSensorCfg(FrameTransformerCfg):
 
         This can be a regex pattern to match multiple prims. For example, "/Robot/.*" will match all prims under "/Robot".
 
-        This means that if the source :attr:`TofSensorCfg.prim_path` is "/Robot/base", and the target :attr:`TofSensorCfg.FrameCfg.prim_path` is "/Robot/.*",
+        This means that if the source :attr:`CapacitiveSensorCfg.prim_path` is "/Robot/base", and the target :attr:`CapacitiveSensorCfg.FrameCfg.prim_path` is "/Robot/.*",
         then the frame transformer will track the poses of all the prims under "/Robot",
         including "/Robot/base" (even though this will result in an identity pose w.r.t. the source frame).
         """
@@ -69,7 +69,7 @@ class TofSensorCfg(FrameTransformerCfg):
         offset: OffsetCfg = OffsetCfg()
         """The pose offset from the parent prim frame."""
 
-    class_type: type = TofSensor
+    class_type: type = CapacitiveSensor
 
     prim_path: str = MISSING
     """The prim path of the body to transform from (source frame)."""
@@ -80,8 +80,8 @@ class TofSensorCfg(FrameTransformerCfg):
     target_frames: list[FrameCfg] = MISSING
     """A list of the target frames.
 
-    This allows a single TofSensor to handle multiple target prims. For example, in a quadruped,
-    we can use a single TofSensor to track each foot's position and orientation in the body
+    This allows a single CapacitiveSensor to handle multiple target prims. For example, in a quadruped,
+    we can use a single CapacitiveSensor to track each foot's position and orientation in the body
     frame using four frame offsets.
     """
 
@@ -91,35 +91,22 @@ class TofSensorCfg(FrameTransformerCfg):
     When a distance to a target is computed, the distances will be computed from the relative positions of the sensors to the target in the world frame.
     """
 
-    relative_sensor_quat: list[tuple[float, float, float, float]] = [(1.0, 0.0, 0.0, 0.0)]
-    """The relative orientations (quaternions w,x,y,z) of sensors per link. 
-    
-    (1.0, 0.0, 0.0, 0.0) is the identity quaternion meaning the sensor is aligned with the link frame.
-    The sensor's forward direction is along the local Z-axis.
+    max_range: float = 0.15 # meters. This is the point where SNR becomes <= 3.5
+    max_SNR: float = 100.0 # dB
+    k_factor: float = 1.0 # emperically derived parallel plate capacitor constant
+    projectile_radius: float = 0.05 # meters
+    """Radius of the projectile. This is subtracted from the distance to the target to compute the closest point.
     """
 
-    max_range: float = 4.0  # meters
-    """Maximum detection range of the sensor in meters."""
-
-    projectile_radius: float = 0.05  # meters
-    """Field of view radius (beam width) in meters.
-    
-    This defines the cylindrical beam width of the ToF sensor. A target is only detected
-    if its perpendicular distance from the sensor's axis (XY plane in sensor frame) is 
-    less than or equal to this radius.
+    """
+    Parameter to adjust the sensitivity of the sensor. C = k/d.
     """
 
-    fov_deg: float = 45.0
-    pixel_count: int = 8
-    """It is assumed that the sensor is a square with the number of pixels on each side.
-    The number of pixels is used to determine the angle of each pixel.
-    """
 
-    visualizer_cfg: VisualizationMarkersCfg = TOF_LINE_MARKER_CFG
-    """The configuration object for the visualization markers. Defaults to TOF_LINE_MARKER_CFG.
+    visualizer_cfg: VisualizationMarkersCfg = CAPACITIVE_LINE_MARKER_CFG
+    """The configuration object for the visualization markers. Defaults to CAPACITIVE_LINE_MARKER_CFG.
 
     Note:
         This attribute is only used when debug visualization is enabled.
-        Only shows lines for pixels that detect an object (distance < max_range).
-        Line length matches the actual reported distance.
+        Only shows lines for sensor-target pairs within max_range (no frame axes).
     """

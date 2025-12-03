@@ -66,7 +66,8 @@ H12_CFG_HANDLESS = ArticulationCfg(
        # asset_path= "/home/niraj/isaac_projects/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_handless.urdf",
        
         #laptop path
-        asset_path= "/home/niraj/isaac_projects/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf",
+        # asset_path= "/home/niraj/isaac_projects/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf",
+        asset_path= "/home/carson/isaac-lab/H12_Bullet_Time/h12_bullet_time/source/h12_bullet_time/h12_bullet_time/assets/robots/gentact_descriptions/robots/h1-2/h1_2_torso_skin.urdf",
 
         activate_contact_sensors=True,
 

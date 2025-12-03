@@ -170,7 +170,7 @@ def create_scene_config():
             ],
             relative_sensor_pos=sensor_positions,
             relative_sensor_quat=sensor_orientations,  # Pass orientations
-            debug_vis=False,
+            debug_vis=True,
             max_range=4.0,  # meters
             projectile_radius=projectile_radius,
         )

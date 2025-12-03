@@ -93,6 +93,7 @@ class ActionsCfg:
             "right_elbow_joint",
         ],
         scale= 0.25, # change this scaling to make it 
+        # scale= 1.0,
     )
 
 
@@ -150,7 +151,7 @@ class RewardsCfg:
     # Uses custom Gaussian function: exp(-5*error²) peaks at +1.0 at target height
     base_height = RewTerm(
         func=local_mdp.base_height_l2,
-        weight=10.0,
+        weight=5.0,
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
