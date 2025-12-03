@@ -42,8 +42,8 @@ _DEFAULT_MAX_RANGE = 4.0
 _DEFAULT_DEBUG_VIS = True
 _DEFAULT_SENSOR_TYPE = "TOF"
 _DEFAULT_PROXIMITY_SCALE = -0.001
-_DEFAULT_CONTACT_SCALE = -0.1
-_DEFAULT_CONTACT_THRESHOLD = 0.01 # (%) of sensor range
+_DEFAULT_CONTACT_SCALE = -0.01
+_DEFAULT_CONTACT_THRESHOLD = 0.05 # (%) of sensor range
 
 # Read ablation overrides from environment variables
 _projectile_radius = float(os.environ.get("ABLATION_PROJECTILE_RADIUS", _DEFAULT_PROJECTILE_RADIUS))
@@ -234,8 +234,12 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         last_action = ObsTerm(func=mdp.last_action)
 
-        distances_obs = ObsTerm(
-            func=local_mdp.distances_obs,
+        # distances_obs = ObsTerm(
+        #     func=local_mdp.distances_obs,
+        #     scale=0.25,
+        # )
+        min_distances_obs = ObsTerm(
+            func=local_mdp.min_distances_obs,
             scale=0.25,
         )
         

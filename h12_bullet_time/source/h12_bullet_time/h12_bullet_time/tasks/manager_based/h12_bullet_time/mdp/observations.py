@@ -150,6 +150,40 @@ def distances_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
     
     return distances_readings
 
+def min_distances_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
+
+    num_envs = env.num_envs
+    all_sensor_data = []
+
+    # Get sensors from env.scene._sensors dict (IsaacLab's official sensor registry)
+    if hasattr(env.scene, '_sensors') and isinstance(env.scene._sensors, dict):
+        for sensor_name, sensor_obj in env.scene._sensors.items():
+            # Check if this is a TofSensor
+            if isinstance(sensor_obj, CapacitiveSensor) or isinstance(sensor_obj, TofSensor):
+                sensor_data = sensor_obj.data
+                
+                # Get distance measurements
+                if hasattr(sensor_data, "dist_est_normalized"):
+                    distances = sensor_data.dist_est_normalized
+
+                    if isinstance(sensor_obj, TofSensor):
+                        distances = distances.min(dim=4)
+                    
+                    # Flatten everything and reshape to (num_envs, features_per_env)
+                    all_flat = distances.reshape(-1)
+                    total_per_env = all_flat.numel() // num_envs
+                    
+                    # Reshape to (num_envs, features_per_env)
+                    flattened = all_flat.reshape(num_envs, total_per_env)
+                    all_sensor_data.append(flattened)
+
+    if not all_sensor_data:
+        return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+    
+    distances_readings = torch.cat(all_sensor_data, dim=1)
+    
+    return distances_readings
+
 
 def tof_distances_obs(
     env: ManagerBasedRLEnv,
