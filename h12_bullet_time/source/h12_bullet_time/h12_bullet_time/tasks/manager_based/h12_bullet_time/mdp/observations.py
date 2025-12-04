@@ -28,6 +28,7 @@ __all__ = [
     "tof_distances_obs",
     "cap_distances_obs",
     "distances_obs",
+    "min_distances_obs",
 ]
 
 
@@ -167,7 +168,10 @@ def min_distances_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
                     distances = sensor_data.dist_est_normalized
 
                     if isinstance(sensor_obj, TofSensor):
-                        distances = distances.min(dim=4)
+                        # Take min across pixel dimension (dim=3) to get closest detection per sensor-target
+                        # Shape: (N, S, M, P) -> (N, S, M)
+                        # .min() returns (values, indices) tuple, so extract .values
+                        distances = distances.min(dim=3).values
                     
                     # Flatten everything and reshape to (num_envs, features_per_env)
                     all_flat = distances.reshape(-1)

@@ -172,6 +172,11 @@ def distances_penalty(
                 if hasattr(sensor_data, "dist_est_normalized"):
                     # Shape: (num_envs, num_sensors, num_targets) or similar
                     normalized_distances = sensor_data.dist_est_normalized
+                    if isinstance(sensor_obj, TofSensor):
+                        # Take min across pixel dimension (dim=3) to get closest detection per sensor-target
+                        # Shape: (N, S, M, P) -> (N, S, M)
+                        # .min() returns (values, indices) tuple, so extract .values
+                        normalized_distances = normalized_distances.min(dim=3).values
                     # Proximity = 1 - normalized_distance (1 = touching, 0 = far)
                     proximity = 1.0 - normalized_distances
                     # Sum all proximity values per environment

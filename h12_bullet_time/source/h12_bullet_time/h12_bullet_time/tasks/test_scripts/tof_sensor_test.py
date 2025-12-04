@@ -116,7 +116,7 @@ def create_scene_config():
     # First extract sensor positions from URDF
     sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
     # Moving sphere projectile radius
-    projectile_radius = 0.5
+    projectile_radius = 0.1
     
     print(f"[INFO]: Extracted {len(sensor_library)} links with sensors from URDF")
     total_sensors = sum(len(positions) for positions in sensor_library.values())

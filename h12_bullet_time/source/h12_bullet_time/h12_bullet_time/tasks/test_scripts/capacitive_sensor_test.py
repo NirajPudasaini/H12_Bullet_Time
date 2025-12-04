@@ -53,6 +53,8 @@ def create_scene_config():
     """
     # First extract sensor positions from URDF
     sensor_library = extract_sensor_positions_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
+    # Moving sphere projectile radius
+    projectile_radius = 0.1
     
     print(f"[INFO]: Extracted {len(sensor_library)} links with sensors from URDF")
     total_sensors = sum(len(positions) for positions in sensor_library.values())
@@ -80,12 +82,12 @@ def create_scene_config():
         # Moving cube
         moving_cube = AssetBaseCfg(
             prim_path="{ENV_REGEX_NS}/Projectile",
-            spawn=sim_utils.CuboidCfg(
-                size=(0.3, 0.3, 0.3),
+            spawn=sim_utils.SphereCfg(
+                radius=projectile_radius,
                 mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             ),
-            init_state=AssetBaseCfg.InitialStateCfg(pos=(1.0, 0.0, 0.15)),
+            init_state=AssetBaseCfg.InitialStateCfg(pos=(1.5, 0.0, 1.5)),
         )
     
     # Dynamically add sensor configs as class attributes
@@ -103,7 +105,8 @@ def create_scene_config():
             ],
             relative_sensor_pos=sensor_positions,
             debug_vis=True,
-            max_range=0.15,  # meters
+            max_range=1.0,  # meters
+            projectile_radius=projectile_radius,
         )
         
         # Add it as a class attribute

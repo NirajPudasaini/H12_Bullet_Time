@@ -42,7 +42,7 @@ _DEFAULT_MAX_RANGE = 4.0
 _DEFAULT_DEBUG_VIS = True
 _DEFAULT_SENSOR_TYPE = "TOF"
 _DEFAULT_PROXIMITY_SCALE = -0.001
-_DEFAULT_CONTACT_SCALE = -0.01
+_DEFAULT_CONTACT_SCALE = -0.1
 _DEFAULT_CONTACT_THRESHOLD = 0.05 # (%) of sensor range
 
 # Read ablation overrides from environment variables
