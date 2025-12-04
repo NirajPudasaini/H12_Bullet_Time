@@ -11,13 +11,14 @@ from dataclasses import dataclass, field, asdict
 from typing import Any
 
 
-def run_cmd_streaming(cmd: list[str], env: dict) -> tuple[int, str]:
-    """Run command with real-time output streaming. Returns (returncode, captured_output)."""
+def run_cmd(cmd: list[str], env: dict, verbose: bool = True) -> tuple[int, str]:
+    """Run command, optionally streaming output. Returns (returncode, captured_output)."""
     captured = []
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
+        if verbose:
+            sys.stdout.write(line)
+            sys.stdout.flush()
         captured.append(line)
     proc.wait()
     return proc.returncode, "".join(captured)
@@ -34,9 +35,10 @@ def train_and_test(
     params: dict,
     num_envs: int = 4096,
     max_train_iters: int = 1000,
-    max_test_iters: int = 1000,
+    ep_per_env: int = 1,
     task: str = "Isaac-H12-Bullet-Time-Hybrid-v0",
     headless: bool = True,
+    verbose: bool = True,
 ) -> AblationResult:
     """Train and test with given ablation parameters. Returns AblationResult."""
     
@@ -62,7 +64,7 @@ def train_and_test(
         train_cmd.append("--headless")
     
     print(f"\n{'='*60}\n[ABLATION] Training with params: {params}\n{'='*60}")
-    train_returncode, train_output = run_cmd_streaming(train_cmd, env)
+    train_returncode, train_output = run_cmd(train_cmd, env, verbose=verbose)
     
     # Extract log directory from train output
     log_dir = ""
@@ -82,15 +84,15 @@ def train_and_test(
     eval_cmd = [
         "python", str(script_dir / "eval.py"),
         "--task", task,
-        "--num_envs", str(min(num_envs, 64)),
-        "--max_steps", str(max_test_iters),
+        "--num_envs", str(num_envs),
+        "--ep_per_env", str(ep_per_env),
         "--output_file", str(eval_output),
     ]
     if headless:
         eval_cmd.append("--headless")
     
     print(f"[ABLATION] Evaluating...")
-    eval_returncode, _ = run_cmd_streaming(eval_cmd, env)
+    eval_returncode, _ = run_cmd(eval_cmd, env, verbose=verbose)
     
     # Read metrics from JSON
     metrics = {}
@@ -110,7 +112,6 @@ def run_ablation_study(
     param_grid: dict[str, list[Any]],
     output_file: str = f"ablation_results/ablation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
     max_train_iters: int = 1000,
-    max_test_iters: int = 1000,
     **kwargs,
 ) -> list[AblationResult]:
     """Run ablation study over parameter grid. Returns list of results."""
@@ -134,7 +135,7 @@ def run_ablation_study(
         
         # Merge with defaults
         full_params = {**DEFAULTS, **params}
-        result = train_and_test(full_params, max_train_iters=max_train_iters, max_test_iters=max_test_iters, **kwargs)
+        result = train_and_test(full_params, max_train_iters=max_train_iters, **kwargs)
         results.append(result)
         
         # Save intermediate results
@@ -166,16 +167,16 @@ if __name__ == "__main__":
     # Example ablation study configuration
     PARAM_GRID = {
         "ABLATION_SENSOR_TYPE": ["TOF", "CAP"],
-        "ABLATION_MAX_RANGE": [0.5, 2.0, 4.0],
+        "ABLATION_MAX_RANGE": [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 3.0, 4.0],
         # Add more parameters to sweep here
     }
     
     run_ablation_study(
         param_grid=PARAM_GRID,
         num_envs=4096,
-        max_train_iters=10,
-        max_test_iters=10,
+        max_train_iters=500,
         headless=True,
         task="Template-H12-Bullet-Time-HYBRID",
+        verbose=False,
     )
 

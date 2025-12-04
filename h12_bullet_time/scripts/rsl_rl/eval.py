@@ -15,7 +15,8 @@ parser.add_argument("--num_envs", type=int, default=64, help="Number of environm
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--agent", type=str, default="rsl_rl_cfg_entry_point", help="Agent config entry point.")
 parser.add_argument("--seed", type=int, default=None, help="Seed for environment.")
-parser.add_argument("--max_steps", type=int, default=1000, help="Max evaluation steps.")
+parser.add_argument("--max_ep_duration", type=int, default=5, help="Max evaluation episode duration (seconds).")
+parser.add_argument("--ep_per_env", type=int, default=1, help="Episodes to run per environment before stopping.")
 parser.add_argument("--output_file", type=str, default="eval_results.json", help="Output JSON file path.")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -51,13 +52,13 @@ def get_min_sensor_distances(env) -> torch.Tensor:
     """Get minimum normalized distance across all sensors for each environment."""
     unwrapped = env.unwrapped
     num_envs = unwrapped.num_envs
-    min_dists = torch.ones(num_envs, device=unwrapped.device)  # Start at 1.0 (max normalized)
+    min_dists = torch.inf * torch.ones(num_envs, device=unwrapped.device)  # Start at inf
     
     if hasattr(unwrapped.scene, '_sensors'):
         for sensor_obj in unwrapped.scene._sensors.values():
             if isinstance(sensor_obj, (CapacitiveSensor, TofSensor)):
-                if hasattr(sensor_obj.data, "dist_est_normalized"):
-                    dists = sensor_obj.data.dist_est_normalized  # Already normalized [0,1]
+                if hasattr(sensor_obj.data, "dist_est"):
+                    dists = sensor_obj.data.dist_est
                     # Flatten per env and take min
                     per_env = dists.reshape(num_envs, -1).min(dim=1).values
                     min_dists = torch.minimum(min_dists, per_env)
@@ -97,61 +98,78 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     # Collect statistics
     num_envs = env_cfg.scene.num_envs
     device = env.unwrapped.device
+    ep_per_env = args_cli.ep_per_env
+    target_episodes = num_envs * ep_per_env
+    
     episode_rewards = torch.zeros(num_envs, device=device)
     episode_lengths = torch.zeros(num_envs, device=device)
+    episode_min_dists = torch.inf * torch.ones(num_envs, device=device)
+    env_ep_count = torch.zeros(num_envs, dtype=torch.int, device=device)  # Episodes completed per env
+    env_active = torch.ones(num_envs, dtype=torch.bool, device=device)  # Which envs are still collecting
+    
     completed_rewards = []
     completed_lengths = []
+    completed_min_dists = []
+    completed_stayed_alive = []  # True if episode didn't hit terminal state
     
-    # Track minimum distance ever seen per environment
-    env_min_distances = torch.ones(num_envs, device=device)  # Start at 1.0 (normalized max)
-    all_step_min_distances = []  # For computing median
+    # Max steps per episode (for determining if episode timed out vs terminated)
+    max_ep_steps = int(args_cli.max_ep_duration / env.unwrapped.step_dt)
 
     obs = env.get_observations()
+    step = 0
     
-    for step in range(args_cli.max_steps):
+    while len(completed_min_dists) < target_episodes:
         with torch.inference_mode():
             actions = policy(obs)
             obs, rewards, dones, infos = env.step(actions)
         
-        # Track sensor distances
+        # Track sensor distances (only for active envs)
         step_min_dists = get_min_sensor_distances(env)
-        env_min_distances = torch.minimum(env_min_distances, step_min_dists)
-        all_step_min_distances.append(step_min_dists.min().item())
+        episode_min_dists = torch.where(env_active, torch.minimum(episode_min_dists, step_min_dists), episode_min_dists)
         
-        episode_rewards += rewards
-        episode_lengths += 1
+        episode_rewards += rewards * env_active
+        episode_lengths += env_active.float()
         
-        # Record completed episodes
-        done_indices = dones.nonzero(as_tuple=False).squeeze(-1)
+        # Record completed episodes (only from active envs)
+        done_indices = (dones & env_active).nonzero(as_tuple=False).squeeze(-1)
         for idx in done_indices:
+            ep_len = episode_lengths[idx].item()
             completed_rewards.append(episode_rewards[idx].item())
-            completed_lengths.append(episode_lengths[idx].item())
+            completed_lengths.append(ep_len)
+            completed_min_dists.append(episode_min_dists[idx].item())
+            completed_stayed_alive.append(ep_len >= max_ep_steps)  # Survived full duration
+            env_ep_count[idx] += 1
+            # Reset for next episode
             episode_rewards[idx] = 0
             episode_lengths[idx] = 0
+            episode_min_dists[idx] = torch.inf
+            # Deactivate env if it hit quota
+            if env_ep_count[idx] >= ep_per_env:
+                env_active[idx] = False
         
-        if (step + 1) % 100 == 0:
-            print(f"[EVAL] Step {step+1}/{args_cli.max_steps}, Episodes: {len(completed_rewards)}, Min dist: {step_min_dists.min().item():.4f}")
-
-    # Include any still-running episodes
-    for i in range(num_envs):
-        if episode_lengths[i] > 0:
-            completed_rewards.append(episode_rewards[i].item())
-            completed_lengths.append(episode_lengths[i].item())
+        step += 1
+        if step % 100 == 0:
+            print(f"[EVAL] Step {step}, Episodes: {len(completed_min_dists)}/{target_episodes}, Active envs: {env_active.sum().item()}")
 
     env.close()
 
     # Compute statistics
     rewards_arr = np.array(completed_rewards) if completed_rewards else np.array([0.0])
     lengths_arr = np.array(completed_lengths) if completed_lengths else np.array([0.0])
-    env_min_np = env_min_distances.cpu().numpy()
+    min_dists_arr = np.array(completed_min_dists) if completed_min_dists else np.array([np.inf])
+    num_episodes = len(completed_min_dists)
     
-    # Distance thresholds for counting
+    # Distance thresholds for counting (per episode)
     thresholds = [0.0001, 0.01, 0.1, 0.2, 0.3, 0.4, 0.5]
-    dist_below_threshold = {f"dist_min_below_{t}": int((env_min_np < t).sum()) for t in thresholds}
+    dist_below_threshold = {f"dist_min_below_{t}": int((min_dists_arr < t).sum()) for t in thresholds}
     
-    # Success: fraction of envs that never measured < 0.01
-    envs_safe = int((env_min_np >= 0.01).sum())
-    success = envs_safe / num_envs
+    # Success: fraction of episodes that never measured < 0.01
+    eps_safe = int((min_dists_arr >= 0.01).sum())
+    success = eps_safe / max(num_episodes, 1)
+    
+    # Stayed alive: episodes that didn't hit terminal state (ran full duration)
+    stayed_alive_count = sum(completed_stayed_alive)
+    stayed_alive_rate = stayed_alive_count / max(num_episodes, 1)
     
     stats = {
         "mean_reward": float(np.mean(rewards_arr)),
@@ -160,16 +178,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
         "max_reward": float(np.max(rewards_arr)),
         "mean_episode_length": float(np.mean(lengths_arr)),
         "std_episode_length": float(np.std(lengths_arr)),
-        "total_episodes": len(completed_rewards),
-        "total_steps": args_cli.max_steps,
+        "total_episodes": num_episodes,
+        "total_steps": step,
         "num_envs": num_envs,
+        "ep_per_env": ep_per_env,
         "checkpoint": resume_path,
-        # Distance metrics
-        "median_closest_distance": float(np.median(env_min_np)),
-        "mean_closest_distance": float(np.mean(env_min_np)),
-        "min_closest_distance": float(np.min(env_min_np)),
+        # Distance metrics (per episode)
+        "median_closest_distance": float(np.median(min_dists_arr)),
+        "mean_closest_distance": float(np.mean(min_dists_arr)),
+        "min_closest_distance": float(np.min(min_dists_arr)),
         **dist_below_threshold,
-        "envs_safe_count": envs_safe,
+        "episodes_safe_count": eps_safe,
+        "stayed_alive_count": stayed_alive_count,
+        "stayed_alive_rate": stayed_alive_rate,
         "success": success,
     }
 

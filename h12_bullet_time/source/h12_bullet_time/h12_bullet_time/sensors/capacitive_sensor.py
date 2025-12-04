@@ -364,7 +364,7 @@ class CapacitiveSensor(SensorBase):
         self._data.target_quat_w = torch.zeros(self._num_envs, len(duplicate_frame_indices), 4, device=self._device)
         self._data.target_pos_source = torch.zeros_like(self._data.target_pos_w)
         self._data.target_quat_source = torch.zeros_like(self._data.target_quat_w)
-        self._data.target_distances = torch.zeros(
+        self._data.dist_est = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
         )
         self._data.target_pos_sensor = torch.zeros(
@@ -458,7 +458,7 @@ class CapacitiveSensor(SensorBase):
         self._data.target_quat_w[:] = target_quat_w.view(-1, total_num_frames, 4)
         self._data.target_pos_source[:] = target_pos_source.view(-1, total_num_frames, 3)
         self._data.target_quat_source[:] = target_quat_source.view(-1, total_num_frames, 4)
-        self._data.target_distances[:] = distances
+        self._data.dist_est[:] = distances
         self._data.target_pos_sensor[:] = target_pos_sensor
         self._data.capacitance_values[:] = capacitance_values
         self._data.dist_est_normalized[:] = dist_est_normalized
@@ -505,7 +505,7 @@ class CapacitiveSensor(SensorBase):
         end_pos = self._data.target_pos_w.unsqueeze(1).expand(-1, self._num_sensors, -1, -1).reshape(-1, 3)
 
         # Get distances for filtering: (N, S, M) -> flatten to match line indices
-        distances = self._data.target_distances.reshape(-1)
+        distances = self._data.dist_est.reshape(-1)
 
         # Filter to only show lines where distance < max_range
         in_range_mask = distances < self.cfg.max_range

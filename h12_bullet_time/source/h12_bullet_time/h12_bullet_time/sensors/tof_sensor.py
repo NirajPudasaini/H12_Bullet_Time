@@ -367,7 +367,7 @@ class TofSensor(SensorBase):
         self._data.target_pos_sensor = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), 3, device=self._device
         )
-        self._data.tof_distances = torch.zeros(
+        self._data.dist_est = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
             dtype=torch.float32, device=self._device
         )
@@ -488,14 +488,14 @@ class TofSensor(SensorBase):
         within_range = raw_target_distances_exp <= self.cfg.max_range
         
         # ToF distance per pixel: (N, S, M, P)
-        tof_distances = torch.where(
+        dist_est = torch.where(
             in_front & within_fov & within_range,
             final_distances,
             torch.full_like(raw_target_distances_exp, self.cfg.max_range)
         )
 
-        # Normalize distances - use the masked tof_distances to avoid NaN from acos domain issues
-        dist_est_normalized = tof_distances / self.cfg.max_range
+        # Normalize distances - use the masked dist_est to avoid NaN from acos domain issues
+        dist_est_normalized = dist_est / self.cfg.max_range
 
         ######################################################
 
@@ -509,7 +509,7 @@ class TofSensor(SensorBase):
         self._data.target_quat_source[:] = target_quat_source.view(-1, total_num_frames, 4)
         self._data.raw_target_distances[:] = raw_target_distances
         self._data.target_pos_sensor[:] = target_pos_sensor
-        self._data.tof_distances[:] = tof_distances
+        self._data.dist_est[:] = dist_est
         self._data.dist_est_normalized[:] = dist_est_normalized
 
     def make_grid(self):
@@ -565,10 +565,10 @@ class TofSensor(SensorBase):
         N, S, M, P = self._num_envs, self._num_sensors, len(self._target_frame_names), self.cfg.pixel_count ** 2
         
         # Get the TOF distances: (N, S, M, P)
-        tof_distances = self._data.tof_distances
+        dist_est = self._data.dist_est
         
         # Detection mask: only show rays that detected something (distance < max_range)
-        detection_mask = tof_distances < self.cfg.max_range  # (N, S, M, P)
+        detection_mask = dist_est < self.cfg.max_range  # (N, S, M, P)
         
         # Early exit if nothing detected
         if not detection_mask.any():
@@ -618,7 +618,7 @@ class TofSensor(SensorBase):
         ray_dirs_w_unit = ray_dirs_w_unit.unsqueeze(2).expand(-1, -1, M, -1, -1)
         
         # Scale ray directions by actual detected distances: (N, S, M, P, 3)
-        ray_dirs_scaled = ray_dirs_w_unit * tof_distances.unsqueeze(-1)
+        ray_dirs_scaled = ray_dirs_w_unit * dist_est.unsqueeze(-1)
         
         # Expand sensor positions: (N, S, 3) -> (N, S, M, P, 3)
         sensor_pos_exp = sensor_pos_w.unsqueeze(2).unsqueeze(3).expand(-1, -1, M, P, -1)

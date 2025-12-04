@@ -69,7 +69,7 @@ class TofSensorData:
     and M is the number of target frames.
     """
 
-    tof_distances: torch.Tensor = None
+    dist_est: torch.Tensor = None
     """Simulated TOF distances for each pixel of each sensor.
 
     Shape is (N, S, M, P), where N is the number of environments, S is the number of sensors,
