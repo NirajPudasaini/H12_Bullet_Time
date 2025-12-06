@@ -106,16 +106,19 @@ class ActionsCfg:
             #Left arm
             "left_shoulder_pitch_joint", #7
             "left_shoulder_roll_joint",  #8
+            "left_shoulder_yaw_joint",  #8
+
             "left_elbow_joint",   #2
 
             # Right arm
             "right_shoulder_pitch_joint",   
             "right_shoulder_roll_joint",   
+            "right_shoulder_yaw_joint",   
             "right_elbow_joint",
         ],
         scale= 0.25, # change this scaling to make it 
+        # scale= 1.0,
     )
-
 
 @configclass
 class ObservationsCfg:

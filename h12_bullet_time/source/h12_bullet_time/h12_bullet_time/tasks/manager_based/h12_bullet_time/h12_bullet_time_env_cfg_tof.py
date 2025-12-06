@@ -146,32 +146,38 @@ class ActionsCfg:
             "left_hip_yaw_joint",
             "left_hip_roll_joint",
             "left_hip_pitch_joint",
-            "left_knee_joint",        
-            "left_ankle_pitch_joint",
-            "left_ankle_roll_joint",
+            "left_knee_joint",        #6      
+            "left_ankle_pitch_joint", #0
+            "left_ankle_roll_joint",  #1
 
             # Right leg
-            "right_hip_yaw_joint",
-            "right_hip_roll_joint",
-            "right_hip_pitch_joint",
+            "right_hip_yaw_joint",   #5
+            "right_hip_roll_joint",  #4
+            "right_hip_pitch_joint", #3
             "right_knee_joint",
             "right_ankle_pitch_joint",
             "right_ankle_roll_joint",
 
-            # torso
+            #torso
             "torso_joint",
 
-            # Left arm
-            "left_shoulder_pitch_joint",
-            "left_shoulder_roll_joint",
-            "left_elbow_joint",
+            #wrists are ignored !! yeah dodging with upper body only no wrist movement
+            #shoulder yaw also ignored
+            #Left arm
+            "left_shoulder_pitch_joint", #7
+            "left_shoulder_roll_joint",  #8
+            "left_shoulder_yaw_joint",  #8
+
+            "left_elbow_joint",   #2
 
             # Right arm
             "right_shoulder_pitch_joint",   
             "right_shoulder_roll_joint",   
+            "right_shoulder_yaw_joint",   
             "right_elbow_joint",
         ],
-        scale=0.25,  
+        scale= 0.25, # change this scaling to make it 
+        # scale= 1.0,
     )
 
 
