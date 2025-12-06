@@ -18,6 +18,7 @@ parser.add_argument("--seed", type=int, default=None, help="Seed for environment
 parser.add_argument("--max_ep_duration", type=int, default=5, help="Max evaluation episode duration (seconds).")
 parser.add_argument("--ep_per_env", type=int, default=1, help="Episodes to run per environment before stopping.")
 parser.add_argument("--output_file", type=str, default="eval_results.json", help="Output JSON file path.")
+parser.add_argument("--contact_threshold", type=float, default=0.01, help="Contact threshold for success.")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -58,9 +59,9 @@ def get_min_sensor_distances(env) -> torch.Tensor:
         for sensor_obj in unwrapped.scene._sensors.values():
             if isinstance(sensor_obj, (CapacitiveSensor, TofSensor)):
                 if hasattr(sensor_obj.data, "dist_est"):
-                    dists = sensor_obj.data.dist_est
+                    raw_target_distances = sensor_obj.data.raw_target_distances
                     # Flatten per env and take min
-                    per_env = dists.reshape(num_envs, -1).min(dim=1).values
+                    per_env = raw_target_distances.reshape(num_envs, -1).min(dim=1).values
                     min_dists = torch.minimum(min_dists, per_env)
     return min_dists
 
@@ -111,10 +112,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     completed_lengths = []
     completed_min_dists = []
     completed_stayed_alive = []  # True if episode didn't hit terminal state
-    
-    # Max steps per episode (for determining if episode timed out vs terminated)
-    max_ep_steps = int(args_cli.max_ep_duration / env.unwrapped.step_dt)
+    completed_alive_rewards = []  # Per-episode alive_bonus reward
+    completed_proximity_penalties = []  # Per-episode distances_penalty reward
 
+    # Track per-episode reward contributions for specific reward terms
+    reward_manager = env.unwrapped.reward_manager
+    term_names = reward_manager.active_terms
+    alive_term_idx = term_names.index("alive_bonus") if "alive_bonus" in term_names else None
+    proximity_term_idx = term_names.index("distances_penalty") if "distances_penalty" in term_names else None
+    alive_episode_rewards = torch.zeros(num_envs, device=device)
+    proximity_episode_rewards = torch.zeros(num_envs, device=device)
+    dt = env.unwrapped.step_dt
+    
     obs = env.get_observations()
     step = 0
     
@@ -129,20 +138,42 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
         
         episode_rewards += rewards * env_active
         episode_lengths += env_active.float()
+
+        # Accumulate per-term rewards for alive_bonus and distances_penalty (only for active envs)
+        step_term_rewards = env.unwrapped.reward_manager._step_reward  # shape: (num_envs, n_terms)
+        active_mask = env_active.float()
+        if alive_term_idx is not None:
+            alive_episode_rewards += step_term_rewards[:, alive_term_idx] * dt * active_mask
+        if proximity_term_idx is not None:
+            proximity_episode_rewards += step_term_rewards[:, proximity_term_idx] * dt * active_mask
         
         # Record completed episodes (only from active envs)
         done_indices = (dones & env_active).nonzero(as_tuple=False).squeeze(-1)
+        # Time-outs come from the RslRlVecEnvWrapper extras for infinite-horizon tasks
+        time_outs = infos.get("time_outs", None)
         for idx in done_indices:
             ep_len = episode_lengths[idx].item()
             completed_rewards.append(episode_rewards[idx].item())
             completed_lengths.append(ep_len)
             completed_min_dists.append(episode_min_dists[idx].item())
-            completed_stayed_alive.append(ep_len >= max_ep_steps)  # Survived full duration
+            if alive_term_idx is not None:
+                completed_alive_rewards.append(alive_episode_rewards[idx].item())
+            if proximity_term_idx is not None:
+                completed_proximity_penalties.append(proximity_episode_rewards[idx].item())
+            # Stayed alive = episode ended due to time-out (did not hit fall/terminal state)
+            if time_outs is not None:
+                stayed_alive = bool(time_outs[idx].item())
+            else:
+                # Fallback: if time-out info is unavailable, mark as not stayed-alive
+                stayed_alive = False
+            completed_stayed_alive.append(stayed_alive)
             env_ep_count[idx] += 1
             # Reset for next episode
             episode_rewards[idx] = 0
             episode_lengths[idx] = 0
             episode_min_dists[idx] = torch.inf
+            alive_episode_rewards[idx] = 0.0
+            proximity_episode_rewards[idx] = 0.0
             # Deactivate env if it hit quota
             if env_ep_count[idx] >= ep_per_env:
                 env_active[idx] = False
@@ -157,6 +188,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     rewards_arr = np.array(completed_rewards) if completed_rewards else np.array([0.0])
     lengths_arr = np.array(completed_lengths) if completed_lengths else np.array([0.0])
     min_dists_arr = np.array(completed_min_dists) if completed_min_dists else np.array([np.inf])
+    alive_rewards_arr = np.array(completed_alive_rewards) if completed_alive_rewards else np.array([0.0])
+    proximity_penalties_arr = np.array(completed_proximity_penalties) if completed_proximity_penalties else np.array([0.0])
     num_episodes = len(completed_min_dists)
     
     # Distance thresholds for counting (per episode)
@@ -164,12 +197,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     dist_below_threshold = {f"dist_min_below_{t}": int((min_dists_arr < t).sum()) for t in thresholds}
     
     # Success: fraction of episodes that never measured < 0.01
-    eps_safe = int((min_dists_arr >= 0.01).sum())
+    eps_safe = int((min_dists_arr >= args_cli.contact_threshold).sum())
     success = eps_safe / max(num_episodes, 1)
     
     # Stayed alive: episodes that didn't hit terminal state (ran full duration)
     stayed_alive_count = sum(completed_stayed_alive)
     stayed_alive_rate = stayed_alive_count / max(num_episodes, 1)
+    median_staying_alive_reward = float(np.median(alive_rewards_arr))
+    median_proximity_penalty_reward = float(np.median(proximity_penalties_arr))
     
     stats = {
         "mean_reward": float(np.mean(rewards_arr)),
@@ -184,6 +219,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
         "ep_per_env": ep_per_env,
         "checkpoint": resume_path,
         # Distance metrics (per episode)
+        "median_staying_alive_reward": median_staying_alive_reward,
+        "median_proximity_penalty_reward": median_proximity_penalty_reward,
         "median_closest_distance": float(np.median(min_dists_arr)),
         "mean_closest_distance": float(np.mean(min_dists_arr)),
         "min_closest_distance": float(np.min(min_dists_arr)),

@@ -34,6 +34,13 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--video_folder", type=str, default=None, help="Folder to save the recorded video.")
+parser.add_argument(
+    "--video_name_prefix",
+    type=str,
+    default="rl-video",
+    help="Prefix to use for recorded video filenames (RecordVideo name_prefix).",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -124,11 +131,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # wrap for video recording
     if args_cli.video:
+        if args_cli.video_folder is None:
+            video_folder = os.path.join(log_dir, "videos", "play")
+        else:
+            video_folder = args_cli.video_folder
         video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "play"),
+            "video_folder": video_folder,
             "step_trigger": lambda step: step == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
+            "name_prefix": args_cli.video_name_prefix,
         }
         print("[INFO] Recording videos during training.")
         print_dict(video_kwargs, nesting=4)
