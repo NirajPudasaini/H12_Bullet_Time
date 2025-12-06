@@ -367,6 +367,9 @@ class CapacitiveSensor(SensorBase):
         self._data.dist_est = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
         )
+        self._data.raw_target_distances = torch.zeros(
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
+        )
         self._data.target_pos_sensor = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), 3, device=self._device
         )
@@ -439,13 +442,14 @@ class CapacitiveSensor(SensorBase):
         target_pos_sensor = target_pos_source.view(-1, total_num_frames, 3).unsqueeze(1) - self._relative_sensor_pos.view(
             1, self._num_sensors, 1, 3
         )
-        distances = torch.linalg.norm(target_pos_sensor, dim=-1) - self.cfg.projectile_radius
+        raw_target_distances = torch.linalg.norm(target_pos_sensor, dim=-1) - self.cfg.projectile_radius
 
         ############### Capacitance simulation ###############
 
         # Extremely basic and non-realistic linear sensor: Just used for debugging.
-        capacitance_values = torch.clamp(-(1/self.cfg.max_range) * distances + 1, min=0.0) * self.cfg.max_SNR
-        dist_est_normalized = torch.where(distances <= self.cfg.max_range, distances / self.cfg.max_range, torch.ones_like(distances))
+        capacitance_values = torch.clamp(-(1/self.cfg.max_range) * raw_target_distances + 1, min=0.0) * self.cfg.max_SNR
+        dist_est = torch.where(raw_target_distances <= self.cfg.max_range, raw_target_distances, torch.ones_like(raw_target_distances) * self.cfg.max_range)
+        dist_est_normalized = dist_est / self.cfg.max_range
 
 
         ######################################################
@@ -458,7 +462,8 @@ class CapacitiveSensor(SensorBase):
         self._data.target_quat_w[:] = target_quat_w.view(-1, total_num_frames, 4)
         self._data.target_pos_source[:] = target_pos_source.view(-1, total_num_frames, 3)
         self._data.target_quat_source[:] = target_quat_source.view(-1, total_num_frames, 4)
-        self._data.dist_est[:] = distances
+        self._data.dist_est[:] = dist_est
+        self._data.raw_target_distances[:] = raw_target_distances
         self._data.target_pos_sensor[:] = target_pos_sensor
         self._data.capacitance_values[:] = capacitance_values
         self._data.dist_est_normalized[:] = dist_est_normalized

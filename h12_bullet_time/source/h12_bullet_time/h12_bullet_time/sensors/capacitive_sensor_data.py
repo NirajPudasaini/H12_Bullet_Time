@@ -55,6 +55,13 @@ class CapacitiveSensorData:
     Shape is (N, 4), where N is the number of environments.
     """
 
+    raw_target_distances: torch.Tensor = None
+    """Distances of the target frame(s) relative to each sensor offset.
+
+    Shape is (N, S, M), where N is the number of environments, S is the number of sensor offsets,
+    and M is the number of target frames.
+    """
+
     dist_est: torch.Tensor = None
     """Distances of the target frame(s) relative to each sensor offset.
 

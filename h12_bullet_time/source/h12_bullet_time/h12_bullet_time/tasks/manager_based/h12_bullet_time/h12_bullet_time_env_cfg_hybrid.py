@@ -44,7 +44,10 @@ _DEFAULT_SENSOR_TYPE = "TOF"
 _DEFAULT_PROXIMITY_SCALE = -0.001
 _DEFAULT_CONTACT_SCALE = -0.1
 _DEFAULT_CONTACT_THRESHOLD = 0.05 # (%) of sensor range
-
+_DEFAULT_PROJECTILE_MASS = 0.1
+_DEFAULT_CONTACT_TERMINATION = True
+_DEFAULT_TERMINATION_ANGLE_THRESHOLD_DEG = 60
+_DEFAULT_TERMINATION_HEIGHT_THRESHOLD = 0.4
 # Read ablation overrides from environment variables
 _projectile_radius = float(os.environ.get("ABLATION_PROJECTILE_RADIUS", _DEFAULT_PROJECTILE_RADIUS))
 _max_range = float(os.environ.get("ABLATION_MAX_RANGE", _DEFAULT_MAX_RANGE))
@@ -53,7 +56,10 @@ _sensor_type = os.environ.get("ABLATION_SENSOR_TYPE", _DEFAULT_SENSOR_TYPE)
 _proximity_scale = float(os.environ.get("ABLATION_PROXIMITY_SCALE", _DEFAULT_PROXIMITY_SCALE))
 _contact_scale = float(os.environ.get("ABLATION_CONTACT_SCALE", _DEFAULT_CONTACT_SCALE))
 _contact_threshold = float(os.environ.get("ABLATION_CONTACT_THRESHOLD", _DEFAULT_CONTACT_THRESHOLD))
-
+_projectile_mass = float(os.environ.get("ABLATION_PROJECTILE_MASS", _DEFAULT_PROJECTILE_MASS))
+_contact_termination = bool(os.environ.get("ABLATION_CONTACT_TERMINATION", _DEFAULT_CONTACT_TERMINATION))
+_termination_angle_threshold_deg = float(os.environ.get("ABLATION_TERMINATION_ANGLE_THRESHOLD_DEG", _DEFAULT_TERMINATION_ANGLE_THRESHOLD_DEG))
+_termination_height_threshold = float(os.environ.get("ABLATION_TERMINATION_HEIGHT_THRESHOLD", _DEFAULT_TERMINATION_HEIGHT_THRESHOLD))
 # Log ablation configuration if any overrides are present
 if any(key.startswith("ABLATION_") for key in os.environ):
     print(f"[{_sensor_type.upper()} CONFIG] Ablation parameters detected:")
@@ -64,6 +70,10 @@ if any(key.startswith("ABLATION_") for key in os.environ):
     print(f"  - proximity_scale: {_proximity_scale} (default: {_DEFAULT_PROXIMITY_SCALE})")
     print(f"  - contact_scale: {_contact_scale} (default: {_DEFAULT_CONTACT_SCALE})")
     print(f"  - contact_threshold: {_contact_threshold} (default: {_DEFAULT_CONTACT_THRESHOLD})")
+    print(f"  - projectile_mass: {_projectile_mass} (default: {_DEFAULT_PROJECTILE_MASS})")
+    print(f"  - contact_termination: {_contact_termination} (default: {_DEFAULT_CONTACT_TERMINATION})")
+    print(f"  - termination_angle_threshold_deg: {_termination_angle_threshold_deg} (default: {_DEFAULT_TERMINATION_ANGLE_THRESHOLD_DEG})")
+    print(f"  - termination_height_threshold: {_termination_height_threshold} (default: {_DEFAULT_TERMINATION_HEIGHT_THRESHOLD})")
 # Extract sensor poses from URDF
 _sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
 
@@ -150,7 +160,7 @@ class H12BulletTimeSceneCfg_HYBRID(InteractiveSceneCfg):
                 solver_position_iteration_count=4,
                 solver_velocity_iteration_count=0,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=50.0),
+            mass_props=sim_utils.MassPropertiesCfg(mass=_projectile_mass),
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(
@@ -372,9 +382,21 @@ class TerminationsCfg:
     # Base height too low (fell down)
     base_height_low = DoneTerm(
         func=local_mdp.base_height_below_threshold,
-        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": 0.4},
+        params={"asset_cfg": SceneEntityCfg("robot"), "threshold": _termination_height_threshold},
+    )
+    bad_orientation = DoneTerm(
+        func=local_mdp.bad_orientation,
+        params={"asset_cfg": SceneEntityCfg("robot"), "angle_threshold_deg": _termination_angle_threshold_deg},
     )
 
+    # Contact termination
+    if _contact_termination:
+        contact_termination = DoneTerm(
+            func=local_mdp.contact_termination,
+            params={"asset_cfg": SceneEntityCfg("Projectile"), "threshold": _contact_threshold},
+        )
+    else:
+        contact_termination = None
 
 ##
 # Environment configuration
