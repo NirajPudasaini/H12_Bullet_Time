@@ -197,12 +197,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     dist_below_threshold = {f"dist_min_below_{t}": int((min_dists_arr < t).sum()) for t in thresholds}
     
     # Success: fraction of episodes that never measured < 0.01
-    eps_safe = int((min_dists_arr >= args_cli.contact_threshold).sum())
-    success = eps_safe / max(num_episodes, 1)
+    eps_safe = int((min_dists_arr > args_cli.contact_threshold + 0.01).sum())
+    # success = eps_safe / max(num_episodes, 1)
     
     # Stayed alive: episodes that didn't hit terminal state (ran full duration)
     stayed_alive_count = sum(completed_stayed_alive)
     stayed_alive_rate = stayed_alive_count / max(num_episodes, 1)
+    success = stayed_alive_rate
     median_staying_alive_reward = float(np.median(alive_rewards_arr))
     median_proximity_penalty_reward = float(np.median(proximity_penalties_arr))
     

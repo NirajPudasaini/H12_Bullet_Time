@@ -39,6 +39,7 @@ def train_and_test(
     task: str = "Isaac-H12-Bullet-Time-Hybrid-v0",
     headless: bool = True,
     verbose: bool = True,
+    seed: int | None = None,
 ) -> AblationResult:
     """Train and test with given ablation parameters. Returns AblationResult."""
     
@@ -62,6 +63,8 @@ def train_and_test(
     ]
     if headless:
         train_cmd.append("--headless")
+    if seed is not None:
+        train_cmd.extend(["--seed", str(seed)])
     
     print(f"\n{'='*60}\n[ABLATION] Training with params: {params}\n{'='*60}")
     train_returncode, train_output = run_cmd(train_cmd, env, verbose=verbose)
@@ -92,6 +95,8 @@ def train_and_test(
     ]
     if headless:
         eval_cmd.append("--headless")
+    if seed is not None:
+        eval_cmd.extend(["--seed", str(seed)])
     
     print(f"[ABLATION] Evaluating...")
     eval_returncode, _ = run_cmd(eval_cmd, env, verbose=verbose)
@@ -175,17 +180,115 @@ def record_video(
         return False
 
 
+def load_cached_results(
+    output_folder: str,
+    combinations: list[dict],
+    defaults: dict,
+) -> tuple[list[dict], list[AblationResult]]:
+    """Load cached results from previous ablation runs.
+    
+    Scans the output folder for existing ablation_results_*.json files and
+    matches them against the requested parameter combinations. Only exact
+    parameter matches (same keys and values) with valid results are cached.
+    
+    Args:
+        output_folder: Path to the output folder to scan
+        combinations: List of parameter combinations to run
+        defaults: Default parameter values to merge with combinations
+        
+    Returns:
+        Tuple of (remaining_combinations, cached_results) where:
+        - remaining_combinations: Combinations that still need to be run
+        - cached_results: Results loaded from cache that match exactly
+    """
+    output_path = Path(output_folder)
+    cached_results = []
+    remaining_combinations = []
+    
+    # Load all existing results from JSON files
+    existing_results = []
+    for json_file in sorted(output_path.glob("ablation_results_*.json")):
+        # Skip directories (like _videos folders)
+        if json_file.is_dir():
+            continue
+        try:
+            with open(json_file) as f:
+                data = json.load(f)
+                for item in data:
+                    existing_results.append(item)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[ABLATION] Warning: Could not load {json_file}: {e}")
+            continue
+    
+    print(f"[ABLATION] Found {len(existing_results)} existing results in {output_folder}")
+    
+    def normalize_value(v):
+        """Normalize values for comparison (env vars are strings)."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            if v.lower() == "true":
+                return True
+            if v.lower() == "false":
+                return False
+            try:
+                # Try int first, then float
+                if "." in v:
+                    return float(v)
+                return int(v)
+            except ValueError:
+                return v
+        return v
+    
+    # Check each combination against existing results
+    for params in combinations:
+        full_params = {**defaults, **params}
+        normalized_full = {k: normalize_value(v) for k, v in full_params.items()}
+        
+        # Look for exact match in existing results
+        matched = False
+        for existing in existing_results:
+            existing_params = existing.get("params", {})
+            normalized_existing = {k: normalize_value(v) for k, v in existing_params.items()}
+            
+            # Check for exact match (same keys and values)
+            if normalized_full == normalized_existing:
+                # Check that we have actual results (not a failed run)
+                if existing.get("test_metrics"):
+                    result = AblationResult(
+                        params=existing_params,
+                        train_log_dir=existing.get("train_log_dir", ""),
+                        test_metrics=existing.get("test_metrics", {}),
+                        success=existing.get("success", 0.0),
+                    )
+                    cached_results.append(result)
+                    print(f"[ABLATION] Cache hit: {params} -> success={result.success}")
+                    matched = True
+                    break
+        
+        if not matched:
+            remaining_combinations.append(params)
+    
+    print(f"[ABLATION] {len(cached_results)} cached, {len(remaining_combinations)} remaining to run")
+    return remaining_combinations, cached_results
+
+
 def run_ablation_study(
     param_grid: dict[str, list[Any]],
     output_folder: str = "ablation_results",
-    max_train_iters: int = 1000,
+    training_times: dict[str, int] = {},
     save_video: bool = False,
     video_num_envs: int = 1,
     video_length: int = 300,
     task: str = "Isaac-H12-Bullet-Time-Hybrid-v0",
+    seed: int = 42,
     **kwargs,
 ) -> list[AblationResult]:
-    """Run ablation study over parameter grid. Returns list of results."""
+    """Run ablation study over parameter grid. Returns list of results.
+    
+    Args:
+        seed: Base seed for reproducibility. Each configuration gets seed + config_index.
+    """
     
     # Generate all parameter combinations
     keys = list(param_grid.keys())
@@ -201,15 +304,25 @@ def run_ablation_study(
     print(f"\n{'#'*60}")
     print(f"# ABLATION STUDY: {len(combinations)} configurations")
     print(f"# Parameters: {keys}")
+    print(f"# Base seed: {seed}")
     print(f"{'#'*60}\n")
     
-    results = []
+    # Load cached results and filter out already-completed combinations
+    combinations, cached_results = load_cached_results(output_folder, combinations, DEFAULTS)
+    results = list(cached_results)  # Start with cached results
+    
+    total_to_run = len(combinations)
+    print(f"[ABLATION] Running {total_to_run} new configurations ({len(cached_results)} cached)\n")
+    
     for i, params in enumerate(combinations):
-        print(f"\n[{i+1}/{len(combinations)}] Running configuration...")
+        print(f"\n[{i+1}/{total_to_run}] Running configuration...")
         
         # Merge with defaults
         full_params = {**DEFAULTS, **params}
-        result = train_and_test(full_params, max_train_iters=max_train_iters, task=task, **kwargs)
+        # Each configuration gets a unique seed for reproducibility
+        config_seed = seed + i + len(cached_results)
+        max_train_iters = training_times.get(full_params.get("ABLATION_SENSOR_TYPE", "CAP"), 500)
+        result = train_and_test(full_params, max_train_iters=max_train_iters, task=task, seed=config_seed, **kwargs)
         results.append(result)
 
         if save_video:
@@ -241,36 +354,50 @@ DEFAULTS = {
     "ABLATION_MAX_RANGE": 1.0,
     "ABLATION_DEBUG_VIS": False,  # Disable vis for ablation runs
     "ABLATION_SENSOR_TYPE": "CAP",
-    "ABLATION_PROXIMITY_SCALE": -0.001,
+    "ABLATION_PROXIMITY_SCALE": -0.01,
     "ABLATION_CONTACT_SCALE": -0.5,
-    "ABLATION_CONTACT_THRESHOLD": 0.05,
+    "ABLATION_CONTACT_THRESHOLD": 0.03,
     "ABLATION_PROJECTILE_MASS": 0.1,
     "ABLATION_CONTACT_TERMINATION": True,
     "ABLATION_TERMINATION_ANGLE_THRESHOLD_DEG": 80,
     "ABLATION_TERMINATION_HEIGHT_THRESHOLD": 0.4,
+    "ABLATION_PROJECTILE_MIN_SPEED": 4.0,
+    "ABLATION_PROJECTILE_MAX_SPEED": 6.0,
+    "ABLATION_PROJECTILE_MIN_SPAWN_DIST": 2.0,
+    "ABLATION_PROJECTILE_MAX_SPAWN_DIST": 3.0,
+    "ABLATION_PROJECTILE_MIN_HEIGHT": 1.0,
+    "ABLATION_PROJECTILE_MAX_HEIGHT": 3.0,
 }
 
 if __name__ == "__main__":
     # Example ablation study configuration
     PARAM_GRID = {
-        "ABLATION_SENSOR_TYPE": ["CAP", "TOF"],
+        "ABLATION_SENSOR_TYPE": ["CAP", "TOF", "CAP_TOF"],
         # "ABLATION_MAX_RANGE": [0.001, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 3.0, 4.0],
-        "ABLATION_MAX_RANGE": [0.2, 0.5, 1.0, 2.0, 4.0],
+        "ABLATION_MAX_RANGE": [4.0, 2.0, 1.0, 0.5, 0.2, 0.1],
+        # "ABLATION_MAX_RANGE": [4.0, 2.0, 1.0, 0.5, 0.2, 0.15, 0.1],
         # "ABLATION_CONTACT_TERMINATION": [True, False],
-        "ABLATION_PROXIMITY_SCALE": [-0.001, -0.01, -0.1],
+        # "ABLATION_PROXIMITY_SCALE": [-0.001, -0.01, -0.1],
         # "ABLATION_CONTACT_SCALE": [-0.01, -0.1, -0.5, -1.0],
-        "ABLATION_PROJECTILE_MASS": [0.1, 1.0, 10.0],
+        # "ABLATION_PROJECTILE_MASS": [0.1, 1.0, 10.0],
         # Add more parameters to sweep here
+    }
+
+    TRAINING_TIMES = {
+        "TOF": 800,
+        "CAP": 800,
+        "CAP_TOF": 1000,
     }
     
     run_ablation_study(
         param_grid=PARAM_GRID,
         num_envs=4096,
-        max_train_iters=500,
+        training_times=TRAINING_TIMES,
         headless=True,
         task="Template-H12-Bullet-Time-HYBRID",
         verbose=False,
         save_video=True,
         video_length=1000,
+        seed=42,  # Base seed for reproducibility
     )
 
