@@ -372,9 +372,10 @@ DEFAULTS = {
 if __name__ == "__main__":
     # Example ablation study configuration
     PARAM_GRID = {
-        "ABLATION_SENSOR_TYPE": ["CAP", "TOF", "CAP_TOF"],
+        # "ABLATION_SENSOR_TYPE": ["CAP", "TOF", "CAP_TOF"],
+        "ABLATION_SENSOR_TYPE": ["TOF"],
         # "ABLATION_MAX_RANGE": [0.001, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 3.0, 4.0],
-        "ABLATION_MAX_RANGE": [4.0, 2.0, 1.0, 0.5, 0.2, 0.1],
+        "ABLATION_MAX_RANGE": [4.0],
         # "ABLATION_MAX_RANGE": [4.0, 2.0, 1.0, 0.5, 0.2, 0.15, 0.1],
         # "ABLATION_CONTACT_TERMINATION": [True, False],
         # "ABLATION_PROXIMITY_SCALE": [-0.001, -0.01, -0.1],
@@ -384,8 +385,8 @@ if __name__ == "__main__":
     }
 
     TRAINING_TIMES = {
-        "TOF": 800,
-        "CAP": 800,
+        "TOF": 5,
+        "CAP": 5,
         "CAP_TOF": 1000,
     }
     
