@@ -89,3 +89,10 @@ class CapacitiveSensorData:
     Shape is (N, S, M), where N is the number of environments, S is the number of sensors,
     and M is the number of target frames.
     """
+
+    dist_est_change_normalized: torch.Tensor = None
+    """Change in estimated normalized distances of the target frame(s) relative to each sensor offset.
+
+    Shape is (N, S, M), where N is the number of environments, S is the number of sensors,
+    and M is the number of target frames.
+    """

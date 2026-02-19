@@ -379,6 +379,12 @@ class CapacitiveSensor(SensorBase):
         self._data.dist_est_normalized = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
         )
+        self._data.dist_est_change_normalized = torch.zeros(
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
+        )
+        self._last_dist_est_normalized = torch.zeros(
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
+        )
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
         """Fills the buffers of the sensor data."""
@@ -450,7 +456,8 @@ class CapacitiveSensor(SensorBase):
         capacitance_values = torch.clamp(-(1/self.cfg.max_range) * raw_target_distances + 1, min=0.0) * self.cfg.max_SNR
         dist_est = torch.where(raw_target_distances <= self.cfg.max_range, raw_target_distances, torch.ones_like(raw_target_distances) * self.cfg.max_range)
         dist_est_normalized = dist_est / self.cfg.max_range
-
+        dist_est_change_normalized = dist_est_normalized - self._last_dist_est_normalized
+        self._last_dist_est_normalized = dist_est_normalized
 
         ######################################################
 
@@ -467,7 +474,8 @@ class CapacitiveSensor(SensorBase):
         self._data.target_pos_sensor[:] = target_pos_sensor
         self._data.capacitance_values[:] = capacitance_values
         self._data.dist_est_normalized[:] = dist_est_normalized
-
+        self._data.dist_est_change_normalized[:] = dist_est_change_normalized
+        self._last_dist_est_normalized[:] = dist_est_normalized
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # set visibility of markers

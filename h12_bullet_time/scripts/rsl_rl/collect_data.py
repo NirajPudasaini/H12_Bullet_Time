@@ -22,10 +22,10 @@ parser.add_argument(
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--use_pretrained_checkpoint", action="store_true")
 parser.add_argument("--num_trajectories", type=int, default=100, help="Total trajectories to collect.")
-parser.add_argument("--max_traj_length", type=int, default=500, help="Max timesteps per trajectory.")
+parser.add_argument("--max_traj_length", type=int, default=5000, help="Max timesteps per trajectory.")
 parser.add_argument("--min_traj_length", type=int, default=10, help="Discard trajectories shorter than this.")
 parser.add_argument("--output_dir", type=str, default="collected_data", help="Output directory for H5 files.")
-parser.add_argument("--trajs_per_file", type=int, default=50, help="Trajectories per H5 file.")
+parser.add_argument("--trajs_per_file", type=int, default=1000, help="Trajectories per H5 file.")
 parser.add_argument(
     "--sensor_type", type=str, default=None, choices=["CAP", "TOF", "CAP_TOF"],
     help="Sensor type — must match the config used during training (sets ABLATION_SENSOR_TYPE).",
@@ -99,7 +99,7 @@ class TrajectoryBuffer:
         return {k: np.stack(v) for k, v in self.data.items()}
 
 
-def save_trajectories(trajs, filepath, traj_offset, metadata=None):
+def save_trajectories(trajs, filepath, traj_offset, metadata=None, probe_radius=None, sensor_static=None):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with h5py.File(filepath, "w") as f:
         if metadata:
@@ -113,6 +113,8 @@ def save_trajectories(trajs, filepath, traj_offset, metadata=None):
             data = traj.to_numpy()
 
             for key, arr in data.items():
+                if key.endswith(("_link_pos_w", "_link_quat_w")):
+                    continue
                 if key.startswith("depth_sensor_"):
                     sg = obs_grp.create_group(key)
                     sg.create_dataset(
@@ -135,6 +137,23 @@ def save_trajectories(trajs, filepath, traj_offset, metadata=None):
             for key in ("joint_pos", "joint_vel", "base_pos", "base_quat", "base_lin_vel", "base_ang_vel"):
                 if key in data:
                     state_grp.create_dataset(key, data=data[key].astype(np.float32), compression="gzip")
+
+            if "probe_pos" in data:
+                probe_grp = tg.create_group("probe")
+                probe_grp.create_dataset("position", data=data["probe_pos"].astype(np.float32), compression="gzip")
+                if probe_radius is not None:
+                    probe_grp.attrs["radius"] = float(probe_radius)
+
+            if sensor_static:
+                st_grp = tg.create_group("sensor_transforms")
+                for sname, sinfo in sensor_static.items():
+                    sg = st_grp.create_group(sname)
+                    sg.create_dataset("relative_pos", data=sinfo["relative_pos"].astype(np.float32))
+                    sg.create_dataset("relative_quat", data=sinfo["relative_quat"].astype(np.float32))
+                    lp_key, lq_key = f"{sname}_link_pos_w", f"{sname}_link_quat_w"
+                    if lp_key in data:
+                        sg.create_dataset("link_pos_w", data=data[lp_key].astype(np.float32), compression="gzip")
+                        sg.create_dataset("link_quat_w", data=data[lq_key].astype(np.float32), compression="gzip")
 
     print(f"[INFO] Saved {len(trajs)} trajectories to {filepath}")
 
@@ -184,6 +203,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     unwrapped = env.unwrapped
     num_envs = unwrapped.num_envs
     robot = unwrapped.scene["robot"]
+    env_origins = unwrapped.scene.env_origins.cpu().numpy()
+
+    # Discover probe (Projectile)
+    projectile = unwrapped.scene["Projectile"]
+    projectile_radius = projectile.cfg.spawn.radius
 
     # Discover sensors
     tof_sensors, cap_sensors, tof_pixel_counts = {}, {}, {}
@@ -200,10 +224,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if not tof_sensors and not cap_sensors:
         print("[WARN] No sensors found! Verify --sensor_type matches your environment config.")
 
+    # Gather static sensor transforms (relative to parent link)
+    sensor_static_info = {}
+    all_sensors = {**cap_sensors, **tof_sensors}
+    for name, sensor in all_sensors.items():
+        rel_pos = sensor._relative_sensor_pos.cpu().numpy()
+        if hasattr(sensor, "_relative_sensor_quat"):
+            rel_quat = sensor._relative_sensor_quat.cpu().numpy()
+        else:
+            rel_quat = np.tile([1.0, 0.0, 0.0, 0.0], (rel_pos.shape[0], 1)).astype(np.float32)
+        sensor_static_info[name] = {"relative_pos": rel_pos, "relative_quat": rel_quat}
+
     # Output setup
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_subdir = os.path.join(args_cli.output_dir, f"roboset_{timestamp}")
-    metadata = {"task": args_cli.task, "num_envs": num_envs, "timestamp": timestamp, "sensor_type": sensor_type}
+    metadata = {"task": args_cli.task, "num_envs": num_envs, "timestamp": timestamp, "sensor_type": sensor_type,
+                "joint_names": robot.joint_names}
 
     # Collection loop
     buffers = [TrajectoryBuffer() for _ in range(num_envs)]
@@ -216,12 +252,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # Batch GPU -> CPU transfers (one per sensor + robot state)
             tof_snaps = {n: s.data.dist_est_normalized.cpu().numpy() for n, s in tof_sensors.items()}
             cap_snaps = {n: s.data.dist_est_normalized.cpu().numpy() for n, s in cap_sensors.items()}
+            link_tf = {
+                n: (s.data.source_pos_w.cpu().numpy(), s.data.source_quat_w.cpu().numpy())
+                for n, s in all_sensors.items()
+            }
             jp = robot.data.joint_pos.cpu().numpy()
             jv = robot.data.joint_vel.cpu().numpy()
             bp = robot.data.root_pos_w.cpu().numpy()
             bq = robot.data.root_quat_w.cpu().numpy()
             blv = robot.data.root_lin_vel_w.cpu().numpy()
             bav = robot.data.root_ang_vel_w.cpu().numpy()
+            pp = projectile.data.root_pos_w.cpu().numpy()
+
+            bp -= env_origins
+            pp -= env_origins
+            for _n in link_tf:
+                link_tf[_n] = (link_tf[_n][0] - env_origins, link_tf[_n][1])
 
             actions = policy(obs)
             act_np = actions.cpu().numpy()
@@ -254,6 +300,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 buf.append("base_quat", bq[ei])
                 buf.append("base_lin_vel", blv[ei])
                 buf.append("base_ang_vel", bav[ei])
+                buf.append("probe_pos", pp[ei])
+                for sname, (lp, lq) in link_tf.items():
+                    buf.append(f"{sname}_link_pos_w", lp[ei])
+                    buf.append(f"{sname}_link_quat_w", lq[ei])
                 buf.append("actions", act_np[ei])
                 buf.step_done()
 
@@ -275,7 +325,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                                 output_subdir, f"roboset_{timestamp}_part{file_counter:03d}.h5"
                             )
                             save_trajectories(
-                                completed, fp, file_counter * args_cli.trajs_per_file, metadata
+                                completed, fp, file_counter * args_cli.trajs_per_file, metadata, projectile_radius, sensor_static_info
                             )
                             completed = []
                             file_counter += 1
@@ -286,7 +336,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Save remaining trajectories
     if completed:
         fp = os.path.join(output_subdir, f"roboset_{timestamp}_part{file_counter:03d}.h5")
-        save_trajectories(completed, fp, file_counter * args_cli.trajs_per_file, metadata)
+        save_trajectories(completed, fp, file_counter * args_cli.trajs_per_file, metadata, projectile_radius, sensor_static_info)
 
     print(f"[INFO] Complete: {traj_counter} trajectories saved to {output_subdir}")
     env.close()

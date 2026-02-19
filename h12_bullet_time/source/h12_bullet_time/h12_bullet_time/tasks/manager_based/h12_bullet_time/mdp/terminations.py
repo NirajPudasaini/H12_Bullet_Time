@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import ContactSensor
 
 from h12_bullet_time.sensors.capacitive_sensor import CapacitiveSensor
 from h12_bullet_time.sensors.tof_sensor import TofSensor
@@ -150,10 +151,108 @@ def projectile_hit_after_steps(
 
 def contact_termination(
     env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    threshold: float = 1.0,
+) -> torch.Tensor:
+    """Terminate when any robot body makes physical contact with the projectile.
+    
+    This uses Isaac Lab's ContactSensor which reports actual physics collision forces
+    between surfaces, providing accurate surface-to-surface contact detection regardless
+    of link origin positions.
+    
+    Args:
+        env: The RL environment.
+        sensor_cfg: Configuration for the contact sensor (should be configured with
+                   filter_prim_paths_expr pointing to the projectile).
+        threshold: Force threshold (N) above which contact is considered to have occurred.
+                  Default is 1.0 N.
+    
+    Returns:
+        Boolean tensor of shape (num_envs,) indicating which environments should terminate.
+    """
+    # Get the contact sensor from the scene
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    
+    # force_matrix_w has shape: (num_envs, num_bodies, num_filter_shapes, 3)
+    # where num_filter_shapes corresponds to the projectile(s) we're filtering against
+    force_matrix = contact_sensor.data.force_matrix_w
+    
+    # Compute the magnitude of contact forces for each body-filter pair
+    # Shape: (num_envs, num_bodies, num_filter_shapes)
+    force_magnitudes = torch.norm(force_matrix, dim=-1)
+    
+    # Check if any body in any environment has contact force above threshold
+    # First reduce over filter shapes and bodies to get per-env max contact force
+    max_force_per_env = force_magnitudes.view(env.num_envs, -1).max(dim=1)[0]
+    
+    # Terminate if max contact force exceeds threshold
+    is_terminated = max_force_per_env > threshold
+    
+    return is_terminated
+
+
+def multi_contact_termination(
+    env: ManagerBasedRLEnv,
+    sensor_names: list[str],
+    threshold: float = 1.0,
+) -> torch.Tensor:
+    """Terminate when any of multiple robot bodies makes physical contact with the projectile.
+    
+    This uses multiple ContactSensors (one per body) to detect actual physics collision forces
+    between surfaces. Each sensor monitors a single body filtered against the projectile.
+    
+    Args:
+        env: The RL environment.
+        sensor_names: List of contact sensor names to check.
+        threshold: Force threshold (N) above which contact is considered to have occurred.
+                  Default is 1.0 N.
+    
+    Returns:
+        Boolean tensor of shape (num_envs,) indicating which environments should terminate.
+    """
+    is_terminated = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    
+    for sensor_name in sensor_names:
+        # Check if sensor exists
+        if sensor_name not in env.scene.sensors:
+            continue
+            
+        contact_sensor: ContactSensor = env.scene.sensors[sensor_name]
+        
+        # force_matrix_w has shape: (num_envs, num_bodies, num_filter_shapes, 3)
+        # For single-body sensors with single filter, shape is (num_envs, 1, 1, 3)
+        force_matrix = contact_sensor.data.force_matrix_w
+        
+        # Compute the magnitude of contact forces
+        force_magnitudes = torch.norm(force_matrix, dim=-1)
+        
+        # Get max force per environment (flatten body and filter dims)
+        max_force_per_env = force_magnitudes.view(env.num_envs, -1).max(dim=1)[0]
+        
+        # Update termination mask
+        is_terminated = is_terminated | (max_force_per_env > threshold)
+    
+    return is_terminated
+
+
+def sensor_based_contact_termination(
+    env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,
     threshold: float = 0.05,
 ) -> torch.Tensor:
-
+    """Terminate based on capacitive/TOF sensor readings (legacy implementation).
+    
+    This uses custom capacitive or TOF sensors to detect proximity/contact.
+    Note: This may not detect contacts on robot surfaces without sensors.
+    
+    Args:
+        env: The RL environment.
+        asset_cfg: Configuration for the asset (unused, kept for API compatibility).
+        threshold: Distance threshold below which contact is considered to have occurred.
+    
+    Returns:
+        Boolean tensor of shape (num_envs,) indicating which environments should terminate.
+    """
     num_envs = env.num_envs
     is_terminated = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
     
@@ -162,18 +261,11 @@ def contact_termination(
         for sensor_name, sensor_obj in env.scene._sensors.items():
             if isinstance(sensor_obj, CapacitiveSensor) or isinstance(sensor_obj, TofSensor):
                 sensor_data = sensor_obj.data
-                if hasattr(sensor_data, "dist_est_normalized"):
+                if hasattr(sensor_data, "raw_target_distances"):
                     # Shape: (num_envs, num_sensors, num_targets) or similar
-                    dist_est = sensor_data.dist_est
-                    if isinstance(sensor_obj, TofSensor):
-                        # Take min across pixel dimension (dim=3) to get closest detection per sensor-target
-                        # Shape: (N, S, M, P) -> (N, S, M)
-                        # .min() returns (values, indices) tuple, so extract .values
-                        dist_est = dist_est.min(dim=3).values
-                    # Proximity = 1 - normalized_distance (1 = touching, 0 = far)
-                    # proximity = 1.0 - normalized_distances
+                    raw_target_distances = sensor_data.raw_target_distances
                     # Check if any sensor in each environment detected contact below threshold
                     # Flatten all sensor dimensions and reduce to per-env boolean
-                    contact_mask = (dist_est < threshold).view(num_envs, -1).any(dim=1)
+                    contact_mask = (raw_target_distances < threshold).view(num_envs, -1).any(dim=1)
                     is_terminated = is_terminated | contact_mask
     return is_terminated

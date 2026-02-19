@@ -19,6 +19,8 @@ __all__ = [
     "torso_pitch_curriculum",
     "torso_pitch_reward",
     "distances_penalty",
+    "energy_penalty",
+    "pos_drift_penalty",
 ]
 
 
@@ -150,6 +152,36 @@ def projectile_hit_penalty(
 #             penalty_tensor[hit_mask] = float(penalty)
 
 #     return penalty_tensor
+
+def energy_penalty(
+    env: ManagerBasedRLEnv,
+    scale: float = -1.0,
+) -> torch.Tensor:
+    """Penalize energy consumption."""
+    robot: Articulation = env.scene["robot"]
+    torques = robot.data.applied_torque
+    total_torque = torch.sum(torch.abs(torques), dim=1)
+    return scale * total_torque
+
+def pos_drift_penalty(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    scale: float = -1.0,
+) -> torch.Tensor:
+    """Penalize position drift."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    pos_xy = asset.data.root_pos_w[:, :2]
+    origins_xy = getattr(env.scene, "env_origins", None)
+    if origins_xy is None:
+        origins_xy = torch.zeros_like(pos_xy)
+    else:
+        origins_xy = origins_xy[:, :2]
+    try:
+        start_xy = asset.data.default_root_state[:, :2] + origins_xy
+    except Exception:
+        start_xy = origins_xy
+    drift_sq = (pos_xy - start_xy).pow(2).sum(dim=1)
+    return float(scale) * drift_sq
 
 def distances_penalty(
     env: ManagerBasedRLEnv,

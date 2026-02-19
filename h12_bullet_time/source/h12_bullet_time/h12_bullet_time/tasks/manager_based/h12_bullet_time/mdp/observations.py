@@ -25,9 +25,8 @@ __all__ = [
     "projectile_position_relative",
     "projectile_velocity",
     "projectile_distance_obs",
-    "tof_distances_obs",
-    "cap_distances_obs",
     "distances_obs",
+    "distance_change_obs",
     "min_distances_obs",
 ]
 
@@ -89,37 +88,6 @@ def projectile_distance_obs(env: ManagerBasedRLEnv, projectile_name: str = "Proj
     
     return distance
 
-def cap_distances_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
-
-    num_envs = env.num_envs
-    all_sensor_data = []
-
-    # Get sensors from env.scene._sensors dict (IsaacLab's official sensor registry)
-    if hasattr(env.scene, '_sensors') and isinstance(env.scene._sensors, dict):
-        for sensor_name, sensor_obj in env.scene._sensors.items():
-            # Check if this is a TofSensor
-            if isinstance(sensor_obj, CapacitiveSensor):
-                sensor_data = sensor_obj.data
-                
-                # Get distance measurements
-                if hasattr(sensor_data, "cap_dist_est_normalized"):
-                    distances = sensor_data.cap_dist_est_normalized
-                    
-                    # Flatten everything and reshape to (num_envs, features_per_env)
-                    all_flat = distances.reshape(-1)
-                    total_per_env = all_flat.numel() // num_envs
-                    
-                    # Reshape to (num_envs, features_per_env)
-                    flattened = all_flat.reshape(num_envs, total_per_env)
-                    all_sensor_data.append(flattened)
-
-    if not all_sensor_data:
-        return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
-    
-    cap_distances_readings = torch.cat(all_sensor_data, dim=1)
-    
-    return cap_distances_readings
-
 def distances_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     num_envs = env.num_envs
@@ -150,6 +118,37 @@ def distances_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
     distances_readings = torch.cat(all_sensor_data, dim=1)
     
     return distances_readings
+
+def distance_change_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
+    
+    num_envs = env.num_envs
+    all_sensor_data = []
+
+    # Get sensors from env.scene._sensors dict (IsaacLab's official sensor registry)
+    if hasattr(env.scene, '_sensors') and isinstance(env.scene._sensors, dict):
+        for sensor_name, sensor_obj in env.scene._sensors.items():
+            # Check if this is a TofSensor
+            if isinstance(sensor_obj, CapacitiveSensor) or isinstance(sensor_obj, TofSensor):
+                sensor_data = sensor_obj.data
+                
+                # Get distance measurements
+                if hasattr(sensor_data, "dist_est_change_normalized"):
+                    dist_diffs = sensor_data.dist_est_change_normalized
+                    
+                    # Flatten everything and reshape to (num_envs, features_per_env)
+                    all_flat = dist_diffs.reshape(-1)
+                    total_per_env = all_flat.numel() // num_envs
+                    
+                    # Reshape to (num_envs, features_per_env)
+                    flattened = all_flat.reshape(num_envs, total_per_env)
+                    all_sensor_data.append(flattened)
+
+    if not all_sensor_data:
+        return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
+    
+    dist_diffs_readings = torch.cat(all_sensor_data, dim=1)
+    
+    return dist_diffs_readings
 
 def min_distances_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
 
@@ -188,71 +187,3 @@ def min_distances_obs(env: ManagerBasedRLEnv) -> torch.Tensor:
     
     return distances_readings
 
-
-def tof_distances_obs(
-    env: ManagerBasedRLEnv,
-    max_range: float = 4.0,
-    handle_nan: str = "replace_with_max",
-) -> torch.Tensor:
-    """TOF sensor distance readings aggregated across all sensors.
-    
-    Args:
-        env: Environment instance
-        max_range: Maximum range of TOF sensors (used for normalization)
-        handle_nan: How to handle NaN values
-        
-    Returns:
-        Flattened TOF sensor distances (num_envs, total_num_measurements)
-        Normalized by max_range so values are in [0, 1]
-    """
-    from h12_bullet_time.sensors.tof_sensor import TofSensor
-    
-    num_envs = env.num_envs
-    all_sensor_data = []
-    
-    # Get sensors from env.scene._sensors dict (IsaacLab's official sensor registry)
-    if hasattr(env.scene, '_sensors') and isinstance(env.scene._sensors, dict):
-        for sensor_name, sensor_obj in env.scene._sensors.items():
-            # Check if this is a TofSensor
-            if isinstance(sensor_obj, TofSensor):
-                sensor_data = sensor_obj.data
-                
-                # Get distance measurements
-                if hasattr(sensor_data, "tof_distances"):
-                    distances = sensor_data.tof_distances
-                    
-                    # Flatten everything and reshape to (num_envs, features_per_env)
-                    all_flat = distances.reshape(-1)
-                    total_per_env = all_flat.numel() // num_envs
-                    
-                    # Reshape to (num_envs, features_per_env)
-                    flattened = all_flat.reshape(num_envs, total_per_env)
-                    all_sensor_data.append(flattened)
-    
-    # If no valid sensors found, return empty observation
-    if not all_sensor_data:
-        return torch.zeros((num_envs, 0), dtype=torch.float32, device=env.device)
-    
-    # Concatenate all sensor readings
-    tof_readings = torch.cat(all_sensor_data, dim=1)
-    
-    # Handle NaN values
-    if handle_nan == "replace_with_max":
-        tof_readings = torch.nan_to_num(tof_readings, nan=max_range)
-    elif handle_nan == "zero":
-        tof_readings = torch.nan_to_num(tof_readings, nan=0.0)
-    elif handle_nan == "mean":
-        # Replace NaN with mean of valid values per environment
-        valid_mask = ~torch.isnan(tof_readings)
-        for env_idx in range(num_envs):
-            valid = tof_readings[env_idx, valid_mask[env_idx]]
-            if valid.numel() > 0:
-                mean_val = valid.mean()
-            else:
-                mean_val = max_range
-            tof_readings[env_idx, ~valid_mask[env_idx]] = mean_val
-    
-    # Normalize to [0, 1]
-    tof_normalized = torch.clamp(tof_readings / max_range, min=0.0, max=1.0)
-    
-    return tof_normalized

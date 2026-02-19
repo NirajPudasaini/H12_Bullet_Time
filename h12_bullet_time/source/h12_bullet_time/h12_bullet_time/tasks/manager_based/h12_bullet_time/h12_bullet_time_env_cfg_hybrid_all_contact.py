@@ -25,6 +25,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab.envs import mdp 
@@ -160,7 +161,7 @@ for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
 
 
 @configclass
-class H12BulletTimeSceneCfg_HYBRID(InteractiveSceneCfg):
+class H12BulletTimeSceneCfg_HYBRID_ALL_CONTACT(InteractiveSceneCfg):
     f"""Configuration for H12 Bullet Time with {_sensor_type.upper()} sensors."""
     # ground plane
     ground = AssetBaseCfg(
@@ -202,19 +203,74 @@ class H12BulletTimeSceneCfg_HYBRID(InteractiveSceneCfg):
     )
 
 
+# List of robot links with collision geometry for contact detection
+# NOTE: Only links with <collision> elements in the URDF are included
+_CONTACT_DETECTION_LINKS = [
+    # Torso
+    "torso_link",
+    "pelvis",
+    # Left leg
+    "left_hip_pitch_link",
+    "left_hip_roll_link",
+    "left_knee_link",
+    "left_ankle_pitch_link",
+    "left_ankle_roll_link",
+    # Right leg
+    "right_hip_pitch_link",
+    "right_hip_roll_link",
+    "right_knee_link",
+    "right_ankle_pitch_link",
+    "right_ankle_roll_link",
+    # Left arm
+    "left_shoulder_pitch_link",
+    "left_shoulder_roll_link",
+    "left_shoulder_yaw_link",
+    "left_elbow_link",
+    "left_wrist_roll_link",
+    "left_wrist_pitch_link",
+    # Right arm
+    "right_shoulder_pitch_link",
+    "right_shoulder_roll_link",
+    "right_shoulder_yaw_link",
+    "right_elbow_link",
+    "right_wrist_roll_link",
+    "right_wrist_pitch_link",
+]
+
+# Build contact sensor configs dictionary
+_contact_sensor_configs = {}
+_contact_sensor_names = []  # Store names for termination function
+
+for link_name in _CONTACT_DETECTION_LINKS:
+    # Create sensor name from link name (e.g., "torso_link" -> "contact_torso_link")
+    sensor_name = f"contact_{link_name}"
+    _contact_sensor_names.append(sensor_name)
+    
+    # Create the contact sensor config
+    _contact_sensor_configs[sensor_name] = ContactSensorCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_name}",
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Projectile"],
+        update_period=0.0,
+        history_length=1,
+        force_threshold=1.0,
+    )
+
+print(f"[CONTACT CONFIG] Created {len(_contact_sensor_configs)} contact sensors for links: {_CONTACT_DETECTION_LINKS}")
+print(f"[CONTACT CONFIG] Sensor names: {_contact_sensor_names}")
+
+
 # Now add all sensor configs as class attributes after class is defined
-print(f"[{_sensor_type.upper()} CONFIG] Adding {len(_sensor_configs)} sensors to scene class...")
+# Add proximity sensors (CAP/TOF)
+print(f"[{_sensor_type.upper()} CONFIG] Adding {len(_sensor_configs)} proximity sensors to scene class...")
 for sensor_name, sensor_cfg in _sensor_configs.items():
-    setattr(H12BulletTimeSceneCfg_HYBRID, sensor_name, sensor_cfg)
+    setattr(H12BulletTimeSceneCfg_HYBRID_ALL_CONTACT, sensor_name, sensor_cfg)
     print(f"[{_sensor_type.upper()} CONFIG] Successfully added: {sensor_name}")
 
-# Debug: verify sensors were actually added
-print(f"[{_sensor_type.upper()} CONFIG] Scene class now has these attributes:")
-for attr_name in dir(H12BulletTimeSceneCfg_HYBRID):
-    if 'cap' in attr_name.lower() or 'sensor' in attr_name.lower():
-        print(f"  - {attr_name}")
-    elif 'tof' in attr_name.lower() or 'sensor' in attr_name.lower():
-        print(f"  - {attr_name}")
+# Add contact sensors for projectile collision detection
+print(f"[CONTACT CONFIG] Adding {len(_contact_sensor_configs)} contact sensors to scene class...")
+for sensor_name, sensor_cfg in _contact_sensor_configs.items():
+    setattr(H12BulletTimeSceneCfg_HYBRID_ALL_CONTACT, sensor_name, sensor_cfg)
+print(f"[CONTACT CONFIG] Successfully added contact sensors: {_contact_sensor_names}")
 
 ##
 # MDP settings
@@ -287,11 +343,7 @@ class ObservationsCfg:
             func=local_mdp.min_distances_obs,
             scale=0.25,
         )
-
-        distance_change_obs = ObsTerm(
-            func=local_mdp.distance_change_obs,
-            scale=0.25,
-        )
+        
         def __post_init__(self) -> None:
             self.enable_corruption = True
             self.concatenate_terms = True
@@ -312,12 +364,8 @@ class ObservationsCfg:
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
         
 
-        # distances_obs = ObsTerm(
-        #     func=local_mdp.distances_obs,
-        #     scale=0.25,
-        # )
-        min_distances_obs = ObsTerm(
-            func=local_mdp.min_distances_obs,
+        distances_obs = ObsTerm(
+            func=local_mdp.distances_obs,
             scale=0.25,
         )
         
@@ -394,26 +442,26 @@ class EventCfg:
     )
 
     # Launch projectiles on reset with varied positions and angles
-    launch_projectile = EventTerm(
-        func=local_mdp.launch_projectile_radial,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("Projectile"),
-        },
-    )
     # launch_projectile = EventTerm(
-    #     func=local_mdp.launch_projectile_target_sampling,
+    #     func=local_mdp.launch_projectile_radial,
     #     mode="reset",
     #     params={
     #         "asset_cfg": SceneEntityCfg("Projectile"),
-    #         "min_spawn_dist": _projectile_min_spawn_dist,
-    #         "max_spawn_dist": _projectile_max_spawn_dist,
-    #         "min_height": _projectile_min_height,
-    #         "max_height": _projectile_max_height,
-    #         "min_speed": _projectile_min_speed,
-    #         "max_speed": _projectile_max_speed,
     #     },
     # )
+    launch_projectile = EventTerm(
+        func=local_mdp.launch_projectile_target_sampling,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("Projectile"),
+            "min_spawn_dist": _projectile_min_spawn_dist,
+            "max_spawn_dist": _projectile_max_spawn_dist,
+            "min_height": _projectile_min_height,
+            "max_height": _projectile_max_height,
+            "min_speed": _projectile_min_speed,
+            "max_speed": _projectile_max_speed,
+        },
+    )
 
     # Debug: log TOF readings at reset to verify sensors (DISABLED for multi-env compatibility)
     # log_tof = EventTerm(
@@ -445,11 +493,16 @@ class TerminationsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "angle_threshold_deg": _termination_angle_threshold_deg},
     )
 
-    # Contact termination
+    # Contact termination using physics-based contact detection
+    # This uses multiple ContactSensors to detect actual surface-to-surface collisions
+    # between robot bodies and the projectile
     if _contact_termination:
         contact_termination = DoneTerm(
-            func=local_mdp.sensor_based_contact_termination,
-            params={"asset_cfg": SceneEntityCfg("Projectile"), "threshold": _contact_threshold},
+            func=local_mdp.multi_contact_termination,
+            params={
+                "sensor_names": _contact_sensor_names,
+                "threshold": _contact_threshold,  # Force threshold in Newtons
+            },
         )
     else:
         contact_termination = None
@@ -459,11 +512,11 @@ class TerminationsCfg:
 ##
 
 @configclass
-class H12BulletTimeEnvCfg_HYBRID(ManagerBasedRLEnvCfg):
+class H12BulletTimeEnvCfg_HYBRID_ALL_CONTACT(ManagerBasedRLEnvCfg):
     """RL environment config with {_sensor_type.upper()} sensor integration."""
     
     # Scene settings
-    scene: H12BulletTimeSceneCfg_HYBRID = H12BulletTimeSceneCfg_HYBRID(num_envs=4096, env_spacing=4.0)
+    scene: H12BulletTimeSceneCfg_HYBRID_ALL_CONTACT = H12BulletTimeSceneCfg_HYBRID_ALL_CONTACT(num_envs=4096, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

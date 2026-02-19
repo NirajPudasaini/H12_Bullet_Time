@@ -25,6 +25,7 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab.envs import mdp 
@@ -37,25 +38,46 @@ from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
 
 
 # Default parameter values (can be overridden via environment variables for ablation studies)
+# Projectile parameters
 _DEFAULT_PROJECTILE_RADIUS = 0.15
-_DEFAULT_MAX_RANGE = 0.1
-_DEFAULT_DEBUG_VIS = True
+_DEFAULT_PROJECTILE_MASS = 0.1
+_DEFAULT_PROJECTILE_MIN_SPAWN_DIST = 4.0
+_DEFAULT_PROJECTILE_MAX_SPAWN_DIST = 6.0
+_DEFAULT_PROJECTILE_MIN_HEIGHT = 2.0
+_DEFAULT_PROJECTILE_MAX_HEIGHT = 3.0
+_DEFAULT_PROJECTILE_MIN_SPEED = 4.0
+_DEFAULT_PROJECTILE_MAX_SPEED = 8.0
+_DEFAULT_PROJECTILE_SPAWN_INTERVAL_RANGE = (1.0, 2.0)
+# Sensor parameters
+_DEFAULT_DEBUG_VIS = False
 _DEFAULT_SENSOR_TYPE = "CAP"
+_DEFAULT_MAX_RANGE = 4.0
+# Reward parameters
 _DEFAULT_PROXIMITY_SCALE = -0.01
 _DEFAULT_CONTACT_SCALE = -0.1
 _DEFAULT_CONTACT_THRESHOLD = 0.03 # (%) of sensor range
-_DEFAULT_PROJECTILE_MASS = 0.1
 _DEFAULT_CONTACT_TERMINATION = True
 _DEFAULT_TERMINATION_ANGLE_THRESHOLD_DEG = 60
 _DEFAULT_TERMINATION_HEIGHT_THRESHOLD = 0.4
-_DEFAULT_PROJECTILE_MIN_SPAWN_DIST = 2.0
-_DEFAULT_PROJECTILE_MAX_SPAWN_DIST = 3.0
-_DEFAULT_PROJECTILE_MIN_HEIGHT = 1.0
-_DEFAULT_PROJECTILE_MAX_HEIGHT = 3.0
-_DEFAULT_PROJECTILE_MIN_SPEED = 4.0
-_DEFAULT_PROJECTILE_MAX_SPEED = 6.0
 # Read ablation overrides from environment variables
 _projectile_radius = float(os.environ.get("ABLATION_PROJECTILE_RADIUS", _DEFAULT_PROJECTILE_RADIUS))
+_projectile_min_spawn_dist = float(os.environ.get("ABLATION_PROJECTILE_MIN_SPAWN_DIST", _DEFAULT_PROJECTILE_MIN_SPAWN_DIST))
+_projectile_max_spawn_dist = float(os.environ.get("ABLATION_PROJECTILE_MAX_SPAWN_DIST", _DEFAULT_PROJECTILE_MAX_SPAWN_DIST))
+_projectile_min_height = float(os.environ.get("ABLATION_PROJECTILE_MIN_HEIGHT", _DEFAULT_PROJECTILE_MIN_HEIGHT))
+_projectile_max_height = float(os.environ.get("ABLATION_PROJECTILE_MAX_HEIGHT", _DEFAULT_PROJECTILE_MAX_HEIGHT))
+_projectile_min_speed = float(os.environ.get("ABLATION_PROJECTILE_MIN_SPEED", _DEFAULT_PROJECTILE_MIN_SPEED))
+_projectile_max_speed = float(os.environ.get("ABLATION_PROJECTILE_MAX_SPEED", _DEFAULT_PROJECTILE_MAX_SPEED))
+# Parse spawn interval range from env var (comma-separated: "1.0,2.0") or use default
+_spawn_interval_str = os.environ.get("ABLATION_PROJECTILE_SPAWN_INTERVAL_RANGE", None)
+if _spawn_interval_str:
+    try:
+        parts = _spawn_interval_str.split(",")
+        _projectile_spawn_interval_range = (float(parts[0].strip()), float(parts[1].strip()))
+    except (ValueError, IndexError):
+        print(f"[WARNING] Invalid ABLATION_PROJECTILE_SPAWN_INTERVAL_RANGE: {_spawn_interval_str}, using default")
+        _projectile_spawn_interval_range = _DEFAULT_PROJECTILE_SPAWN_INTERVAL_RANGE
+else:
+    _projectile_spawn_interval_range = _DEFAULT_PROJECTILE_SPAWN_INTERVAL_RANGE
 _max_range = float(os.environ.get("ABLATION_MAX_RANGE", _DEFAULT_MAX_RANGE))
 _debug_vis = bool(os.environ.get("ABLATION_DEBUG_VIS", _DEFAULT_DEBUG_VIS))
 _sensor_type = os.environ.get("ABLATION_SENSOR_TYPE", _DEFAULT_SENSOR_TYPE)
@@ -66,17 +88,18 @@ _projectile_mass = float(os.environ.get("ABLATION_PROJECTILE_MASS", _DEFAULT_PRO
 _contact_termination = bool(os.environ.get("ABLATION_CONTACT_TERMINATION", _DEFAULT_CONTACT_TERMINATION))
 _termination_angle_threshold_deg = float(os.environ.get("ABLATION_TERMINATION_ANGLE_THRESHOLD_DEG", _DEFAULT_TERMINATION_ANGLE_THRESHOLD_DEG))
 _termination_height_threshold = float(os.environ.get("ABLATION_TERMINATION_HEIGHT_THRESHOLD", _DEFAULT_TERMINATION_HEIGHT_THRESHOLD))
-_projectile_min_spawn_dist = float(os.environ.get("ABLATION_PROJECTILE_MIN_SPAWN_DIST", _DEFAULT_PROJECTILE_MIN_SPAWN_DIST))
-_projectile_max_spawn_dist = float(os.environ.get("ABLATION_PROJECTILE_MAX_SPAWN_DIST", _DEFAULT_PROJECTILE_MAX_SPAWN_DIST))
-_projectile_min_height = float(os.environ.get("ABLATION_PROJECTILE_MIN_HEIGHT", _DEFAULT_PROJECTILE_MIN_HEIGHT))
-_projectile_max_height = float(os.environ.get("ABLATION_PROJECTILE_MAX_HEIGHT", _DEFAULT_PROJECTILE_MAX_HEIGHT))
-_projectile_min_speed = float(os.environ.get("ABLATION_PROJECTILE_MIN_SPEED", _DEFAULT_PROJECTILE_MIN_SPEED))
-_projectile_max_speed = float(os.environ.get("ABLATION_PROJECTILE_MAX_SPEED", _DEFAULT_PROJECTILE_MAX_SPEED))
 # Log ablation configuration if any overrides are present
 if any(key.startswith("ABLATION_") for key in os.environ):
     print(f"[{_sensor_type.upper()} CONFIG] Ablation parameters detected:")
     print(f"  - max_range: {_max_range} (default: {_DEFAULT_MAX_RANGE})")
     print(f"  - projectile_radius: {_projectile_radius} (default: {_DEFAULT_PROJECTILE_RADIUS})")
+    print(f"  - projectile_min_spawn_dist: {_projectile_min_spawn_dist} (default: {_DEFAULT_PROJECTILE_MIN_SPAWN_DIST})")
+    print(f"  - projectile_max_spawn_dist: {_projectile_max_spawn_dist} (default: {_DEFAULT_PROJECTILE_MAX_SPAWN_DIST})")
+    print(f"  - projectile_min_height: {_projectile_min_height} (default: {_DEFAULT_PROJECTILE_MIN_HEIGHT})")
+    print(f"  - projectile_max_height: {_projectile_max_height} (default: {_DEFAULT_PROJECTILE_MAX_HEIGHT})")
+    print(f"  - projectile_min_speed: {_projectile_min_speed} (default: {_DEFAULT_PROJECTILE_MIN_SPEED})")
+    print(f"  - projectile_max_speed: {_projectile_max_speed} (default: {_DEFAULT_PROJECTILE_MAX_SPEED})")
+    print(f"  - projectile_spawn_interval_range: {_projectile_spawn_interval_range} (default: {_DEFAULT_PROJECTILE_SPAWN_INTERVAL_RANGE})")
     print(f"  - debug_vis: {_debug_vis} (default: {_DEFAULT_DEBUG_VIS})")
     print(f"  - sensor_type: {_sensor_type} (default: {_DEFAULT_SENSOR_TYPE})")
     print(f"  - proximity_scale: {_proximity_scale} (default: {_DEFAULT_PROXIMITY_SCALE})")
@@ -86,12 +109,6 @@ if any(key.startswith("ABLATION_") for key in os.environ):
     print(f"  - contact_termination: {_contact_termination} (default: {_DEFAULT_CONTACT_TERMINATION})")
     print(f"  - termination_angle_threshold_deg: {_termination_angle_threshold_deg} (default: {_DEFAULT_TERMINATION_ANGLE_THRESHOLD_DEG})")
     print(f"  - termination_height_threshold: {_termination_height_threshold} (default: {_DEFAULT_TERMINATION_HEIGHT_THRESHOLD})")
-    print(f"  - projectile_min_spawn_dist: {_projectile_min_spawn_dist} (default: {_DEFAULT_PROJECTILE_MIN_SPAWN_DIST})")
-    print(f"  - projectile_max_spawn_dist: {_projectile_max_spawn_dist} (default: {_DEFAULT_PROJECTILE_MAX_SPAWN_DIST})")
-    print(f"  - projectile_min_height: {_projectile_min_height} (default: {_DEFAULT_PROJECTILE_MIN_HEIGHT})")
-    print(f"  - projectile_max_height: {_projectile_max_height} (default: {_DEFAULT_PROJECTILE_MAX_HEIGHT})")
-    print(f"  - projectile_min_speed: {_projectile_min_speed} (default: {_DEFAULT_PROJECTILE_MIN_SPEED})")
-    print(f"  - projectile_max_speed: {_projectile_max_speed} (default: {_DEFAULT_PROJECTILE_MAX_SPEED})")
 # Extract sensor poses from URDF
 _sensor_library = extract_sensor_poses_from_urdf(H12_CFG_HANDLESS.spawn.asset_path, debug=False)
 
@@ -160,8 +177,8 @@ for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
 
 
 @configclass
-class H12BulletTimeSceneCfg_HYBRID(InteractiveSceneCfg):
-    f"""Configuration for H12 Bullet Time with {_sensor_type.upper()} sensors."""
+class H12SurviveTimeSceneCfg_HYBRID (InteractiveSceneCfg):
+    f"""Configuration for H12 Survive Time with {_sensor_type.upper()} sensors."""
     # ground plane
     ground = AssetBaseCfg(
         prim_path="/World/ground",
@@ -202,19 +219,74 @@ class H12BulletTimeSceneCfg_HYBRID(InteractiveSceneCfg):
     )
 
 
+# List of robot links with collision geometry for contact detection
+# NOTE: Only links with <collision> elements in the URDF are included
+_CONTACT_DETECTION_LINKS = [
+    # Torso
+    "torso_link",
+    "pelvis",
+    # Left leg
+    "left_hip_pitch_link",
+    "left_hip_roll_link",
+    "left_knee_link",
+    "left_ankle_pitch_link",
+    "left_ankle_roll_link",
+    # Right leg
+    "right_hip_pitch_link",
+    "right_hip_roll_link",
+    "right_knee_link",
+    "right_ankle_pitch_link",
+    "right_ankle_roll_link",
+    # Left arm
+    "left_shoulder_pitch_link",
+    "left_shoulder_roll_link",
+    "left_shoulder_yaw_link",
+    "left_elbow_link",
+    "left_wrist_roll_link",
+    "left_wrist_pitch_link",
+    # Right arm
+    "right_shoulder_pitch_link",
+    "right_shoulder_roll_link",
+    "right_shoulder_yaw_link",
+    "right_elbow_link",
+    "right_wrist_roll_link",
+    "right_wrist_pitch_link",
+]
+
+# Build contact sensor configs dictionary
+_contact_sensor_configs = {}
+_contact_sensor_names = []  # Store names for termination function
+
+for link_name in _CONTACT_DETECTION_LINKS:
+    # Create sensor name from link name (e.g., "torso_link" -> "contact_torso_link")
+    sensor_name = f"contact_{link_name}"
+    _contact_sensor_names.append(sensor_name)
+    
+    # Create the contact sensor config
+    _contact_sensor_configs[sensor_name] = ContactSensorCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_name}",
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Projectile"],
+        update_period=0.0,
+        history_length=1,
+        force_threshold=1.0,
+    )
+
+print(f"[CONTACT CONFIG] Created {len(_contact_sensor_configs)} contact sensors for links: {_CONTACT_DETECTION_LINKS}")
+print(f"[CONTACT CONFIG] Sensor names: {_contact_sensor_names}")
+
+
 # Now add all sensor configs as class attributes after class is defined
-print(f"[{_sensor_type.upper()} CONFIG] Adding {len(_sensor_configs)} sensors to scene class...")
+# Add proximity sensors (CAP/TOF)
+print(f"[{_sensor_type.upper()} CONFIG] Adding {len(_sensor_configs)} proximity sensors to scene class...")
 for sensor_name, sensor_cfg in _sensor_configs.items():
-    setattr(H12BulletTimeSceneCfg_HYBRID, sensor_name, sensor_cfg)
+    setattr(H12SurviveTimeSceneCfg_HYBRID, sensor_name, sensor_cfg)
     print(f"[{_sensor_type.upper()} CONFIG] Successfully added: {sensor_name}")
 
-# Debug: verify sensors were actually added
-print(f"[{_sensor_type.upper()} CONFIG] Scene class now has these attributes:")
-for attr_name in dir(H12BulletTimeSceneCfg_HYBRID):
-    if 'cap' in attr_name.lower() or 'sensor' in attr_name.lower():
-        print(f"  - {attr_name}")
-    elif 'tof' in attr_name.lower() or 'sensor' in attr_name.lower():
-        print(f"  - {attr_name}")
+# Add contact sensors for projectile collision detection
+print(f"[CONTACT CONFIG] Adding {len(_contact_sensor_configs)} contact sensors to scene class...")
+for sensor_name, sensor_cfg in _contact_sensor_configs.items():
+    setattr(H12SurviveTimeSceneCfg_HYBRID, sensor_name, sensor_cfg)
+print(f"[CONTACT CONFIG] Successfully added contact sensors: {_contact_sensor_names}")
 
 ##
 # MDP settings
@@ -287,11 +359,11 @@ class ObservationsCfg:
             func=local_mdp.min_distances_obs,
             scale=0.25,
         )
-
         distance_change_obs = ObsTerm(
             func=local_mdp.distance_change_obs,
             scale=0.25,
         )
+        
         def __post_init__(self) -> None:
             self.enable_corruption = True
             self.concatenate_terms = True
@@ -312,10 +384,6 @@ class ObservationsCfg:
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
         
 
-        # distances_obs = ObsTerm(
-        #     func=local_mdp.distances_obs,
-        #     scale=0.25,
-        # )
         min_distances_obs = ObsTerm(
             func=local_mdp.min_distances_obs,
             scale=0.25,
@@ -338,28 +406,21 @@ class RewardsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "target_height": 1.04},
     )
 
+    energy_penalty = RewTerm(
+        func=local_mdp.energy_penalty,
+        weight=0.01,
+    )
+
+    pos_drift_penalty = RewTerm(
+        func=local_mdp.pos_drift_penalty,
+        weight=1.0,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+
     alive_bonus = RewTerm(
         func=local_mdp.alive_bonus,
-        weight=5.0,
+        weight=2.0,
         params={},
-    )
-
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.005)
-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0)
-
-    # Standing still reward
-    base_velocity_reward = RewTerm(
-        func=local_mdp.base_velocity_reward,
-        weight=10,
-        params={"asset_cfg": SceneEntityCfg("robot"), "scale": 100.0},
-    )
-
-    distances_penalty = RewTerm(
-        func=local_mdp.distances_penalty,
-        weight=5.0,
-        params={"proximity_scale": _proximity_scale, "contact_scale": _contact_scale, "contact_threshold": _contact_threshold},
     )
 
 @configclass
@@ -394,14 +455,14 @@ class EventCfg:
     )
 
     # Launch projectiles on reset with varied positions and angles
-    launch_projectile = EventTerm(
-        func=local_mdp.launch_projectile_radial,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("Projectile"),
-        },
-    )
     # launch_projectile = EventTerm(
+    #     func=local_mdp.launch_projectile_radial,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("Projectile"),
+    #     },
+    # )
+    # launch_projectile_reset = EventTerm(
     #     func=local_mdp.launch_projectile_target_sampling,
     #     mode="reset",
     #     params={
@@ -415,12 +476,36 @@ class EventCfg:
     #     },
     # )
 
-    # Debug: log TOF readings at reset to verify sensors (DISABLED for multi-env compatibility)
-    # log_tof = EventTerm(
-    #     func=local_mdp.print_tof_readings,
-    #     mode="reset",
-    #     params={},
+    # launch_projectile_interval = EventTerm(
+    #     func=local_mdp.launch_projectile_target_sampling,
+    #     mode="interval",
+    #     interval_range_s=_projectile_spawn_interval_range,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("Projectile"),
+    #         "min_spawn_dist": _projectile_min_spawn_dist,
+    #         "max_spawn_dist": _projectile_max_spawn_dist,
+    #         "min_height": _projectile_min_height,
+    #         "max_height": _projectile_max_height,
+    #         "min_speed": _projectile_min_speed,
+    #         "max_speed": _projectile_max_speed,
+    #     },
     # )
+
+    launch_projectile_reset = EventTerm(
+        func=local_mdp.launch_projectile_radial,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("Projectile"),
+        },
+    )
+    launch_projectile_interval = EventTerm(
+        func=local_mdp.launch_projectile_radial,
+        mode="interval",
+        interval_range_s=_projectile_spawn_interval_range,
+        params={
+            "asset_cfg": SceneEntityCfg("Projectile"),
+        },
+    )
 
 @configclass
 class CurriculumCfg:
@@ -445,25 +530,35 @@ class TerminationsCfg:
         params={"asset_cfg": SceneEntityCfg("robot"), "angle_threshold_deg": _termination_angle_threshold_deg},
     )
 
-    # Contact termination
+    # Contact termination using physics-based contact detection
+    # This uses multiple ContactSensors to detect actual surface-to-surface collisions
+    # between robot bodies and the projectile
     if _contact_termination:
-        contact_termination = DoneTerm(
+        direct_contact_termination = DoneTerm(
+            func=local_mdp.multi_contact_termination,
+            params={
+                "sensor_names": _contact_sensor_names,
+                "threshold": _contact_threshold,  # Force threshold in Newtons
+            },
+        )
+        sensor_based_contact_termination = DoneTerm(
             func=local_mdp.sensor_based_contact_termination,
             params={"asset_cfg": SceneEntityCfg("Projectile"), "threshold": _contact_threshold},
         )
     else:
-        contact_termination = None
+        direct_contact_termination = None
+        sensor_based_contact_termination = None
 
 ##
 # Environment configuration
 ##
 
 @configclass
-class H12BulletTimeEnvCfg_HYBRID(ManagerBasedRLEnvCfg):
+class H12SurviveTimeEnvCfg_HYBRID(ManagerBasedRLEnvCfg):
     """RL environment config with {_sensor_type.upper()} sensor integration."""
     
     # Scene settings
-    scene: H12BulletTimeSceneCfg_HYBRID = H12BulletTimeSceneCfg_HYBRID(num_envs=4096, env_spacing=4.0)
+    scene: H12SurviveTimeSceneCfg_HYBRID = H12SurviveTimeSceneCfg_HYBRID(num_envs=4096, env_spacing=4.0)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -479,7 +574,7 @@ class H12BulletTimeEnvCfg_HYBRID(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 3  # 5 second episodes
+        self.episode_length_s = 10  # 10 second episodes
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings

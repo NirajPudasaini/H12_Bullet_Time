@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import torch
 
@@ -196,7 +196,194 @@ def launch_projectile_radial(
     proj.write_root_pose_to_sim(pose, env_ids)
     proj.write_root_velocity_to_sim(velocity, env_ids)
 
+def launch_projectile_target_sampling(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("Projectile"),
+    min_spawn_dist: float = 1.25,
+    max_spawn_dist: float = 2.0,
+    min_height: float = 1.0,
+    max_height: float = 3.0,
+    min_speed: float = 2.0,
+    max_speed: float = 10.0,
+) -> None:
+    """Launch projectile with ballistic trajectory toward a random body part.
+    
+    Mimics MuJoCo-style projectile launching:
+    1. Select a random body part on the robot as target
+    2. Spawn projectile in a spherical shell around the robot
+    3. Calculate ballistic velocity to hit the target
+    
+    Physics:
+        Given start position, target position, and travel time t:
+        v = (target - start - 0.5 * g * t²) / t
+        
+    Args:
+        env: The environment instance.
+        env_ids: Environment indices to reset projectiles for.
+        asset_cfg: Configuration for the projectile asset.
+        min_spawn_dist: Minimum distance from torso to spawn (default 1.25).
+        max_spawn_dist: Maximum distance from torso to spawn (default 2.0).
+        min_height: Minimum spawn height above ground (default 1.0).
+        max_height: Maximum spawn height above ground (default 3.0).
+        min_speed: Minimum projectile speed (default 2.0).
+        max_speed: Maximum projectile speed (default 10.0).
+        max_velocity: Maximum velocity magnitude cap (default 10.0).
+    """
+    # Get projectile and robot from scene
+    gravity = 9.81
+    proj = env.scene[asset_cfg.name]
+    robot = env.scene["robot"]
+    
+    # Get body names for target selection
+    try:
+        body_names = list(robot.body_names)
+    except Exception:
+        body_names = []
+    
+    root_pos = robot.data.root_pos_w  # (num_envs, 3)
+    device = root_pos.device
+    n = env_ids.numel()
+    
+    # =========================================================================
+    # 1. Select random body parts as targets for each environment
+    # =========================================================================
+    if len(body_names) > 0:
+        # Get all body positions: (num_envs, num_bodies, 3)
+        body_pos_w = robot.data.body_pos_w
+        num_bodies = len(body_names)
+        
+        # Sample random body indices for each environment
+        random_body_indices = torch.randint(
+            0, num_bodies, (n,), device=device, dtype=torch.long
+        )
+        
+        # Gather target positions for selected bodies
+        # body_pos_w[env_ids] gives (n, num_bodies, 3)
+        # We need to index with random_body_indices per environment
+        target_pos = body_pos_w[env_ids, random_body_indices, :]  # (n, 3)
+    else:
+        # Fallback: use root position with height offset
+        target_pos = root_pos[env_ids].clone()
+        target_pos[:, 2] += 1.0  # Add height offset for approximate torso
+    
+    # =========================================================================
+    # 2. Get torso/center position as reference for spawning
+    # =========================================================================
+    if "torso" in body_names:
+        torso_idx = body_names.index("torso")
+        torso_pos = robot.data.body_pos_w[env_ids, torso_idx, :]  # (n, 3)
+    else:
+        torso_pos = root_pos[env_ids]
+    
+    # =========================================================================
+    # 3. Initialize spawn position in bounded spherical shell around robot
+    # =========================================================================
+    # Generate random unit direction vectors (uniformly on sphere)
+    # Using Gaussian method: normalize 3 independent Gaussians
+    dir_vec = torch.randn((n, 3), device=device, dtype=torch.float32)
+    dir_vec = dir_vec / (torch.norm(dir_vec, dim=-1, keepdim=True) + 1e-8)
+    
+    # Sample random distance within [min_spawn_dist, max_spawn_dist]
+    spawn_dist = torch.rand((n,), device=device, dtype=torch.float32)
+    spawn_dist = min_spawn_dist + spawn_dist * (max_spawn_dist - min_spawn_dist)
+    
+    # Compute spawn position
+    spawn_pos = torso_pos + dir_vec * spawn_dist.unsqueeze(-1)
+    
+    # Clamp spawn height: ensure above ground and not too high
+    spawn_pos[:, 2] = torch.clamp(spawn_pos[:, 2], min=min_height, max=max_height)
+    
+    # =========================================================================
+    # 4. Sample random speed and compute travel time
+    # =========================================================================
+    speed = torch.rand((n,), device=device, dtype=torch.float32)
+    speed = min_speed + speed * (max_speed - min_speed)
+    
+    # Compute straight-line distance to target
+    delta = target_pos - spawn_pos  # (n, 3)
+    straight_dist = torch.norm(delta, dim=-1)  # (n,)
+    
+    # Travel time = distance / speed (with minimum to avoid division issues)
+    travel_time = straight_dist / (speed + 1e-6)
+    travel_time = torch.clamp(travel_time, min=0.05)
+    
+    # =========================================================================
+    # 5. Compute ballistic velocity: v = (target - start - 0.5*g*t²) / t
+    # =========================================================================
+    # Gravity vector (assuming -Z is down)
+    g_vec = torch.zeros((n, 3), device=device, dtype=torch.float32)
+    g_vec[:, 2] = -gravity
+    
+    # Ballistic velocity formula
+    # target = start + v*t + 0.5*g*t²
+    # v = (target - start - 0.5*g*t²) / t
+    t = travel_time.unsqueeze(-1)  # (n, 1)
+    velocity = (delta - 0.5 * g_vec * t * t) / t
+    
+    # =========================================================================
+    # 6. Cap velocity magnitude to prevent extreme values
+    # =========================================================================
+    vel_mag = torch.norm(velocity, dim=-1, keepdim=True)  # (n, 1)
+    scale = torch.clamp(max_speed / (vel_mag + 1e-8), max=1.0)
+    velocity = velocity * scale
+    
+    # =========================================================================
+    # 7. Apply pose and velocity to projectile
+    # =========================================================================
+    # Identity quaternion (w, x, y, z)
+    quats = torch.zeros((n, 4), device=device, dtype=torch.float32)
+    quats[:, 0] = 1.0
+    
+    # Zero angular velocity
+    ang_vel = torch.zeros((n, 3), device=device, dtype=torch.float32)
+    
+    pose = torch.cat([spawn_pos, quats], dim=-1)  # (n, 7)
+    full_velocity = torch.cat([velocity, ang_vel], dim=-1)  # (n, 6)
+    
+    proj.write_root_pose_to_sim(pose, env_ids)
+    proj.write_root_velocity_to_sim(full_velocity, env_ids)
 
+
+def launch_projectile_on_loop(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("Projectile"),
+    loop_time: float = 1.0,
+    launch_func: Callable = launch_projectile_target_sampling,
+    launch_params: dict = {},
+) -> None:
+
+    # Initialize step tracking if not present
+    if not hasattr(env, "_projectile_launch_last_step"):
+        env._projectile_launch_last_step = torch.zeros(
+            env.num_envs, dtype=torch.long, device=env.device
+        )
+    
+    step_interval = int(loop_time / env.step_dt)
+    
+    if hasattr(env, "episode_length_buf"):
+        current_steps = env.episode_length_buf
+    else:
+        # Fallback: use a simple counter
+        if not hasattr(env, "_projectile_launch_step_counter"):
+            env._projectile_launch_step_counter = torch.zeros(
+                env.num_envs, dtype=torch.long, device=env.device
+            )
+        env._projectile_launch_step_counter += 1
+        current_steps = env._projectile_launch_step_counter
+    
+    # Check which environments should launch projectiles
+    steps_since_last = current_steps[env_ids] - env._projectile_launch_last_step[env_ids]
+    should_launch = steps_since_last >= step_interval
+    
+    if should_launch.any():
+        # Launch projectiles for environments that meet the interval
+        launch_env_ids = env_ids[should_launch]
+        launch_func(env, launch_env_ids, asset_cfg, **launch_params)
+        
+        # Update last launch step for environments that launched
+        env._projectile_launch_last_step[launch_env_ids] = current_steps[launch_env_ids]
 
 def launch_projectile_curriculum(
     env: ManagerBasedRLEnv,

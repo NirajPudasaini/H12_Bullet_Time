@@ -443,7 +443,7 @@ class TofSensor(SensorBase):
         target_pos_sensor = target_pos_source.unsqueeze(1) - self._relative_sensor_pos.view(
             1, self._num_sensors, 1, 3
         )
-        raw_target_distances = torch.linalg.norm(target_pos_sensor, dim=-1)
+        raw_target_distances = torch.linalg.norm(target_pos_sensor, dim=-1) - self.cfg.projectile_radius
 
         ############### TOF simulation ###############
         # Multi-pixel ToF: each sensor has a pixel_count x pixel_count grid of rays
@@ -451,15 +451,13 @@ class TofSensor(SensorBase):
         
         P = self.cfg.pixel_count ** 2
         
-        # Get base sensor forward directions: (S, 3)
+        # Ray directions: apply grid FoV offsets in sensor-local frame, then
+        # rotate into source frame -> ray = q_sensor * q_grid * z
         z_axis = torch.tensor([0.0, 0.0, 1.0], device=self.device)
-        sensor_forward_base = self._quat_rotate_vec(self._relative_sensor_quat, z_axis)
-        
-        # Apply grid rotations to get ray directions for each pixel: (S, P, 3)
-        # _grid_quats: (P, 4) -> broadcast with sensor_forward_base: (S, 1, 3)
-        sensor_forward_base_exp = sensor_forward_base.unsqueeze(1).expand(-1, P, -1)  # (S, P, 3)
         grid_quats_exp = self._grid_quats.unsqueeze(0).expand(self._num_sensors, -1, -1)  # (S, P, 4)
-        ray_dirs = self._quat_rotate_vec(grid_quats_exp, sensor_forward_base_exp)  # (S, P, 3)
+        sensor_quats_exp = self._relative_sensor_quat.unsqueeze(1).expand(-1, P, -1)  # (S, P, 4)
+        combined_quats = self._quat_multiply(sensor_quats_exp, grid_quats_exp)  # (S, P, 4)
+        ray_dirs = self._quat_rotate_vec(combined_quats, z_axis)  # (S, P, 3)
         
         # Expand target_pos_sensor for pixel dimension: (N, S, M, 3) -> (N, S, M, 1, 3)
         target_pos_exp = target_pos_sensor.unsqueeze(-2)  # (N, S, M, 1, 3)
@@ -475,23 +473,21 @@ class TofSensor(SensorBase):
         perpendicular_vec = target_pos_exp - proj_vec    # (N, S, M, P, 3)
         perpendicular_dist = torch.linalg.norm(perpendicular_vec, dim=-1)  # (N, S, M, P)
         
-        # Expand normalized_distances for pixel dimension: (N, S, M) -> (N, S, M, P)
-        # Clamp ratio to [-1, 1] to avoid NaN from acos when perpendicular_dist > projectile_radius
+        # Ray-sphere intersection: t_near = proj_z - sqrt(R² - d_perp²)
         acos_arg = torch.clamp(perpendicular_dist / self.cfg.projectile_radius, -1.0, 1.0)
-        sphere_offset = self.cfg.projectile_radius * torch.sin(torch.acos(acos_arg))  # offset = r*sin(theta), where theta = acos(perpendicular_dist/r)
-        raw_target_distances_exp = raw_target_distances.unsqueeze(-1).expand(-1, -1, -1, P)
-        final_distances = raw_target_distances_exp - sphere_offset
+        sphere_half_chord = self.cfg.projectile_radius * torch.sin(torch.acos(acos_arg))
+        final_distances = proj_z - sphere_half_chord
         
         # Detection conditions per pixel
         in_front = proj_z > 0
         within_fov = perpendicular_dist <= self.cfg.projectile_radius
-        within_range = raw_target_distances_exp <= self.cfg.max_range
+        within_range = raw_target_distances.unsqueeze(-1) <= self.cfg.max_range
         
         # ToF distance per pixel: (N, S, M, P)
         dist_est = torch.where(
             in_front & within_fov & within_range,
             final_distances,
-            torch.full_like(raw_target_distances_exp, self.cfg.max_range)
+            torch.full_like(final_distances, self.cfg.max_range)
         )
 
         # Normalize distances - use the masked dist_est to avoid NaN from acos domain issues
@@ -594,20 +590,13 @@ class TofSensor(SensorBase):
         )
         sensor_pos_w = sensor_pos_w.view(N, S, 3)
         
-        # Compute ray directions matching the sensor computation order:
-        # 1. First rotate z-axis by sensor orientation (in source frame)
-        # 2. Then apply grid rotations
-        # 3. Finally transform to world frame with source orientation
-        
         z_axis = torch.tensor([0.0, 0.0, 1.0], device=self.device)
         
-        # Step 1: Sensor forward direction = q_sensor * z  (S, 3)
-        sensor_forward_base = self._quat_rotate_vec(self._relative_sensor_quat, z_axis)
-        
-        # Step 2: Apply grid rotations: q_grid * sensor_forward  (S, P, 3)
-        sensor_forward_exp = sensor_forward_base.unsqueeze(1).expand(-1, P, -1)  # (S, P, 3)
+        # Ray dirs in source frame: q_sensor * q_grid * z  (S, P, 3)
         grid_quats_exp = self._grid_quats.unsqueeze(0).expand(S, -1, -1)  # (S, P, 4)
-        ray_dirs_source = self._quat_rotate_vec(grid_quats_exp, sensor_forward_exp)  # (S, P, 3) in source frame
+        sensor_quats_exp = self._relative_sensor_quat.unsqueeze(1).expand(-1, P, -1)  # (S, P, 4)
+        combined_quats = self._quat_multiply(sensor_quats_exp, grid_quats_exp)  # (S, P, 4)
+        ray_dirs_source = self._quat_rotate_vec(combined_quats, z_axis)  # (S, P, 3) in source frame
         
         # Step 3: Transform to world frame: q_source * ray_dirs_source  (N, S, P, 3)
         source_quat_exp = source_quat.expand(-1, S, -1).unsqueeze(2).expand(-1, -1, P, -1)  # (N, S, P, 4)

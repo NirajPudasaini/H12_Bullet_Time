@@ -16,8 +16,8 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = "h12-bullet-time-ppo"
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
-        actor_obs_normalization=False,
-        critic_obs_normalization=False,
+        actor_obs_normalization=True,
+        critic_obs_normalization=True,
         actor_hidden_dims=[32, 32],
         critic_hidden_dims=[32, 32],
         activation="elu",
