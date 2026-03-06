@@ -574,7 +574,7 @@ class H12SurviveTimeEnvCfg_HYBRID(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 10  # 10 second episodes
+        self.episode_length_s = 3  # 10 second episodes
         # viewer settings
         self.viewer.eye = (8.0, 0.0, 5.0)
         # simulation settings

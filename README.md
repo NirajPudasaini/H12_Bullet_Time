@@ -95,3 +95,18 @@ Key hyperparameters:
 - `learning_rate`: Policy learning rate (default: 1.0e-3)
 - `actor_hidden_dims`: Actor network hidden dimensions (default: [32, 32])
 - `critic_hidden_dims`: Critic network hidden dimensions (default: [32, 32])
+
+### Data collection
+```bash
+python scripts/rsl_rl/collect_data.py --task Template-H12-Bullet-Time-HYBRID --num_envs 64 --num_trajectories 100 --headless
+# or
+python scripts/rsl_rl/collect_data.py --task Template-H12-Survive-Time-HYBRID --num_envs 64 --num_trajectories 100 --headless --trajs_per_file 1000 --sensor_type CAP_TOF --static
+```
+--num_envs	64	Parallel environments
+--num_trajectories	100	Total trajectories to collect
+--max_traj_length	500	Max steps per trajectory
+--min_traj_length	10	Discard shorter trajectories
+--output_dir	collected_data	Output root directory
+--trajs_per_file	50	Trajectories per H5 part file
+--sensor_type: CAP | TOF | CAP_TOF
+--static -> Restricts the robot from moving

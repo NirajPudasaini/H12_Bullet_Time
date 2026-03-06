@@ -31,6 +31,7 @@ parser.add_argument(
     help="Sensor type — must match the config used during training (sets ABLATION_SENSOR_TYPE).",
 )
 parser.add_argument("--max_range", type=float, default=None, help="Sensor max range (sets ABLATION_MAX_RANGE).")
+parser.add_argument("--static", action="store_true", default=False, help="Lock all robot joints; robot will not move or fall.")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -247,6 +248,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     obs = env.get_observations()
 
+    if args_cli.static:
+        _dev = robot.data.joint_pos.device
+        _static_root_state = robot.data.root_state_w.clone()
+        _static_root_state[:, 7:] = 0.0
+        _static_jpos = robot.data.joint_pos.clone()
+        _static_jvel = torch.zeros_like(robot.data.joint_vel)
+
     while traj_counter < args_cli.num_trajectories and simulation_app.is_running():
         with torch.inference_mode():
             # Batch GPU -> CPU transfers (one per sensor + robot state)
@@ -310,6 +318,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # Step environment
             obs, _, dones, _ = env.step(actions)
             dones_np = dones.cpu().numpy() if isinstance(dones, torch.Tensor) else np.asarray(dones)
+
+            if args_cli.static:
+                reset_ids = torch.where(torch.from_numpy(dones_np).to(_dev))[0]
+                if len(reset_ids) > 0:
+                    _static_root_state[reset_ids] = robot.data.root_state_w[reset_ids].clone()
+                    _static_root_state[reset_ids, 7:] = 0.0
+                    _static_jpos[reset_ids] = robot.data.joint_pos[reset_ids].clone()
+                robot.write_root_state_to_sim(_static_root_state)
+                robot.write_joint_state_to_sim(_static_jpos, _static_jvel)
 
             # Handle episode ends and max-length cutoffs
             for ei in range(num_envs):

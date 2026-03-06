@@ -38,6 +38,7 @@ docker/.container.cfg
 !.vscode
 
 # Outputs
+collected_data/
 **/output/*
 **/outputs/*
 **/videos/*

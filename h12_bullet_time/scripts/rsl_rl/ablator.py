@@ -281,7 +281,7 @@ def run_ablation_study(
     video_num_envs: int = 1,
     video_length: int = 300,
     task: str = "Isaac-H12-Bullet-Time-Hybrid-v0",
-    seed: int = 42,
+    # seed: int = 42,
     **kwargs,
 ) -> list[AblationResult]:
     """Run ablation study over parameter grid. Returns list of results.
@@ -289,7 +289,8 @@ def run_ablation_study(
     Args:
         seed: Base seed for reproducibility. Each configuration gets seed + config_index.
     """
-    
+    seed = param_grid.get("ABLATION_SEED", 42)
+
     # Generate all parameter combinations
     keys = list(param_grid.keys())
     values = list(param_grid.values())
@@ -367,26 +368,28 @@ DEFAULTS = {
     "ABLATION_PROJECTILE_MAX_SPAWN_DIST": 3.0,
     "ABLATION_PROJECTILE_MIN_HEIGHT": 1.0,
     "ABLATION_PROJECTILE_MAX_HEIGHT": 3.0,
+    "ABLATION_SEED": 42,
 }
 
 if __name__ == "__main__":
     # Example ablation study configuration
     PARAM_GRID = {
-        # "ABLATION_SENSOR_TYPE": ["CAP", "TOF", "CAP_TOF"],
-        "ABLATION_SENSOR_TYPE": ["CAP_TOF"],
+        "ABLATION_SENSOR_TYPE": ["CAP", "TOF", "CAP_TOF"],
+        # "ABLATION_SENSOR_TYPE": ["CAP_TOF"],
         # "ABLATION_MAX_RANGE": [0.001, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 3.0, 4.0],
-        "ABLATION_MAX_RANGE": [4.0],
-        # "ABLATION_MAX_RANGE": [4.0, 2.0, 1.0, 0.5, 0.2, 0.15, 0.1],
+        # "ABLATION_MAX_RANGE": [4.0],
+        "ABLATION_MAX_RANGE": [4.0, 2.0, 1.0, 0.5, 0.2, 0.15, 0.1],
         # "ABLATION_CONTACT_TERMINATION": [True, False],
         # "ABLATION_PROXIMITY_SCALE": [-0.001, -0.01, -0.1],
         # "ABLATION_CONTACT_SCALE": [-0.01, -0.1, -0.5, -1.0],
         # "ABLATION_PROJECTILE_MASS": [0.1, 1.0, 10.0],
+        # "ABLATION_SEED": [42, 43, 44, 45, 46],
         # Add more parameters to sweep here
     }
 
     TRAINING_TIMES = {
-        "TOF": 500,
-        "CAP": 500,
+        "TOF": 3000,
+        "CAP": 3000,
         "CAP_TOF": 3000,
     }
     
@@ -400,6 +403,6 @@ if __name__ == "__main__":
         verbose=False,
         save_video=True,
         video_length=1000,
-        seed=42,  # Base seed for reproducibility
+        # seed=42,  # Base seed for reproducibility
     )
 
