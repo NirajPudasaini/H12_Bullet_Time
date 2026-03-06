@@ -374,7 +374,7 @@ DEFAULTS = {
 if __name__ == "__main__":
     # Example ablation study configuration
     PARAM_GRID = {
-        "ABLATION_SENSOR_TYPE": ["CAP", "TOF", "CAP_TOF"],
+        "ABLATION_SENSOR_TYPE": ["TRUE_POS", "BINARY", "CAP", "TOF", "CAP_TOF"],
         # "ABLATION_SENSOR_TYPE": ["CAP_TOF"],
         # "ABLATION_MAX_RANGE": [0.001, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 3.0, 4.0],
         # "ABLATION_MAX_RANGE": [4.0],
@@ -391,6 +391,8 @@ if __name__ == "__main__":
         "TOF": 3000,
         "CAP": 3000,
         "CAP_TOF": 3000,
+        "TRUE_POS": 3000,
+        "BINARY": 3000,
     }
     
     run_ablation_study(

@@ -34,6 +34,7 @@ from . import mdp as local_mdp
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
 from h12_bullet_time.sensors.capacitive_sensor_cfg import CapacitiveSensorCfg
 from h12_bullet_time.sensors.tof_sensor_cfg import TofSensorCfg
+from h12_bullet_time.sensors.binary_sensor_cfg import BinarySensorCfg
 from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
 
 
@@ -174,6 +175,21 @@ for idx, (link_path, sensor_poses) in enumerate(_sensor_library.items()):
         )
         _sensor_configs[tof_sensor_name] = tof_sensor_cfg
         print(f"[TOF CONFIG] Added sensor: {tof_sensor_name} with {len(sensor_poses)} points")
+
+    if _sensor_type in ("BINARY", "TRUE_POS"):
+        bin_sensor_name = f"bin_sensor_{link_path.replace('_skin', '').replace('_link', '')}"
+        bin_sensor_cfg = BinarySensorCfg(
+            prim_path=f"{{ENV_REGEX_NS}}/Robot/{link_path}",
+            target_frames=[
+                BinarySensorCfg.FrameCfg(prim_path="{ENV_REGEX_NS}/Projectile"),
+            ],
+            relative_sensor_pos=sensor_positions,
+            debug_vis=_debug_vis,
+            max_range=_max_range,
+            projectile_radius=_projectile_radius,
+        )
+        _sensor_configs[bin_sensor_name] = bin_sensor_cfg
+        print(f"[BINARY CONFIG] Added sensor: {bin_sensor_name} with {len(sensor_poses)} points")
 
 
 @configclass
@@ -351,18 +367,17 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         last_action = ObsTerm(func=mdp.last_action)
 
-        # distances_obs = ObsTerm(
-        #     func=local_mdp.distances_obs,
-        #     scale=0.25,
-        # )
-        min_distances_obs = ObsTerm(
-            func=local_mdp.min_distances_obs,
-            scale=0.25,
-        )
-        distance_change_obs = ObsTerm(
-            func=local_mdp.distance_change_obs,
-            scale=0.25,
-        )
+        if _sensor_type == "TRUE_POS":
+            true_pos_obs = ObsTerm(func=local_mdp.true_pos_obs, scale=0.25)
+        else:
+            min_distances_obs = ObsTerm(
+                func=local_mdp.min_distances_obs,
+                scale=0.25,
+            )
+            distance_change_obs = ObsTerm(
+                func=local_mdp.distance_change_obs,
+                scale=0.25,
+            )
         
         def __post_init__(self) -> None:
             self.enable_corruption = True
@@ -380,14 +395,15 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
         last_action = ObsTerm(func=mdp.last_action)
         
-        # Privileged info: linear velocity
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel, scale=0.1)
-        
 
-        min_distances_obs = ObsTerm(
-            func=local_mdp.min_distances_obs,
-            scale=0.25,
-        )
+        if _sensor_type == "TRUE_POS":
+            true_pos_obs = ObsTerm(func=local_mdp.true_pos_obs, scale=0.25)
+        else:
+            min_distances_obs = ObsTerm(
+                func=local_mdp.min_distances_obs,
+                scale=0.25,
+            )
         
         def __post_init__(self) -> None:
             self.enable_corruption = False
