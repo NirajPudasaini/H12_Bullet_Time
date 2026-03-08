@@ -378,7 +378,7 @@ if __name__ == "__main__":
         # "ABLATION_SENSOR_TYPE": ["CAP_TOF"],
         # "ABLATION_MAX_RANGE": [0.001, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 1.0, 2.0, 3.0, 4.0],
         # "ABLATION_MAX_RANGE": [4.0],
-        "ABLATION_MAX_RANGE": [4.0, 2.0, 1.0, 0.5, 0.2, 0.15, 0.1],
+        "ABLATION_MAX_RANGE": [4.0, 2.0, 1.0, 0.5, 0.2, 0.1],
         # "ABLATION_CONTACT_TERMINATION": [True, False],
         # "ABLATION_PROXIMITY_SCALE": [-0.001, -0.01, -0.1],
         # "ABLATION_CONTACT_SCALE": [-0.01, -0.1, -0.5, -1.0],
