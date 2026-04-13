@@ -76,3 +76,6 @@ tests/
 
 training_notes.txt
 logs
+
+# Secrets
+**/.env

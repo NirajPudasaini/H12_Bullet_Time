@@ -375,6 +375,18 @@ class TofSensor(SensorBase):
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
             dtype=torch.float32, device=self._device
         )
+        self._data.dist_est_change_normalized = torch.zeros(
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
+            dtype=torch.float32, device=self._device
+        )
+        self._data.binary_detection = torch.zeros(
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
+            dtype=torch.float32, device=self._device
+        )
+        self._last_dist_est_normalized = torch.zeros(
+            self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
+            dtype=torch.float32, device=self._device
+        )
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
         """Fills the buffers of the sensor data."""
@@ -490,13 +502,12 @@ class TofSensor(SensorBase):
             torch.full_like(final_distances, self.cfg.max_range)
         )
 
-        # Normalize distances - use the masked dist_est to avoid NaN from acos domain issues
         dist_est_normalized = dist_est / self.cfg.max_range
+        dist_est_change_normalized = dist_est_normalized - self._last_dist_est_normalized
+        binary_detection = (dist_est < self.cfg.max_range).float()
 
         ######################################################
 
-        # Update buffers
-        # note: The frame names / ordering don't change so no need to update them after initialization
         self._data.source_pos_w[:] = source_pos_w.view(-1, 3)
         self._data.source_quat_w[:] = source_quat_w.view(-1, 4)
         self._data.target_pos_w[:] = target_pos_w.view(-1, total_num_frames, 3)
@@ -507,6 +518,9 @@ class TofSensor(SensorBase):
         self._data.target_pos_sensor[:] = target_pos_sensor
         self._data.dist_est[:] = dist_est
         self._data.dist_est_normalized[:] = dist_est_normalized
+        self._data.dist_est_change_normalized[:] = dist_est_change_normalized
+        self._data.binary_detection[:] = binary_detection
+        self._last_dist_est_normalized[:] = dist_est_normalized
 
     def make_grid(self):
         """Create quaternions representing ray directions for each pixel in the sensor grid.

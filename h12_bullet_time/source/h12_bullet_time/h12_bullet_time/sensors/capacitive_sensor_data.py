@@ -96,3 +96,6 @@ class CapacitiveSensorData:
     Shape is (N, S, M), where N is the number of environments, S is the number of sensors,
     and M is the number of target frames.
     """
+
+    binary_detection: torch.Tensor = None
+    """Binary detection: 1.0 if within max_range, 0.0 otherwise. Shape: (N, S, M)."""

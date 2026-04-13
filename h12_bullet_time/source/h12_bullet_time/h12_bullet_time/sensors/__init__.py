@@ -2,19 +2,32 @@
 
 """Sensor implementations."""
 
+from .capacitive_sensor import CapacitiveSensor
+from .capacitive_sensor_cfg import CapacitiveSensorCfg
+from .capacitive_sensor_data import CapacitiveSensorData
+
 from .tof_sensor import TofSensor
 from .tof_sensor_cfg import TofSensorCfg
 from .tof_sensor_data import TofSensorData
 
-from .binary_sensor import BinarySensor
-from .binary_sensor_cfg import BinarySensorCfg
-from .binary_sensor_data import BinarySensorData
+from .cone_sensor import ConeSensor
+from .cone_sensor_cfg import ConeSensorCfg
+
+# Canonical aliases: shape-based naming
+FieldSensor = CapacitiveSensor
+FieldSensorCfg = CapacitiveSensorCfg
+FieldSensorData = CapacitiveSensorData
+
+RaySensor = TofSensor
+RaySensorCfg = TofSensorCfg
+RaySensorData = TofSensorData
+
+ConeSensorData = CapacitiveSensorData
 
 __all__ = [
-    "TofSensor",
-    "TofSensorCfg",
-    "TofSensorData",
-    "BinarySensor",
-    "BinarySensorCfg",
-    "BinarySensorData",
+    "CapacitiveSensor", "CapacitiveSensorCfg", "CapacitiveSensorData",
+    "TofSensor", "TofSensorCfg", "TofSensorData",
+    "ConeSensor", "ConeSensorCfg", "ConeSensorData",
+    "FieldSensor", "FieldSensorCfg", "FieldSensorData",
+    "RaySensor", "RaySensorCfg", "RaySensorData",
 ]

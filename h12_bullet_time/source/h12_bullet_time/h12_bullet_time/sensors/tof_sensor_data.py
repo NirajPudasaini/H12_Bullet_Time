@@ -86,3 +86,9 @@ class TofSensorData:
 
     Returns NaN if no target sphere is intersecting with the sensor pixel's ray.
     """
+
+    dist_est_change_normalized: torch.Tensor = None
+    """Change in normalized distances per pixel. Shape: (N, S, M, P)."""
+
+    binary_detection: torch.Tensor = None
+    """Binary detection per pixel: 1.0 if detected, 0.0 otherwise. Shape: (N, S, M, P)."""
