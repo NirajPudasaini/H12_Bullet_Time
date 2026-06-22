@@ -121,6 +121,8 @@ def train_and_test(
     
     contact_threshold = params.get("ABLATION_CONTACT_THRESHOLD", 0.01)
     eval_output = script_dir / f"eval_results_{run_id}.json"
+    throw_log_path = script_dir.parent.parent / "ablation_results" / "throw_log.json"
+    throw_log_path.parent.mkdir(parents=True, exist_ok=True)
     eval_cmd = [
         "python", str(script_dir / "eval.py"),
         "--task", task,
@@ -128,6 +130,7 @@ def train_and_test(
         "--ep_per_env", str(ep_per_env),
         "--output_file", str(eval_output),
         "--contact_threshold", str(contact_threshold),
+        "--throw_log_file", str(throw_log_path),
     ]
     if headless:
         eval_cmd.append("--headless")
@@ -389,7 +392,7 @@ if __name__ == "__main__":
     #
     PARAM_GRID = {
         # "ABLATION_SEED": [43, 44, 45, 46, 47, 48, 49, 50, 51, 52],
-        "ABLATION_SEED": [43],
+        "ABLATION_SEED": [53],
         "ABLATION_SENSORS": [
             # ── Single sensor shapes ──────────────────────────────────
             # Field sensor (spherical detection)

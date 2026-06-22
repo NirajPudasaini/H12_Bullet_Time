@@ -19,6 +19,8 @@ parser.add_argument("--max_ep_duration", type=int, default=5, help="Max evaluati
 parser.add_argument("--ep_per_env", type=int, default=1, help="Episodes to run per environment before stopping.")
 parser.add_argument("--output_file", type=str, default="eval_results.json", help="Output JSON file path.")
 parser.add_argument("--contact_threshold", type=float, default=0.01, help="Contact threshold for success.")
+parser.add_argument("--throw_log_file", type=str, default="", help="Path to binned throw heatmap JSON (merged across runs). Empty to disable.")
+parser.add_argument("--throw_bins", type=int, default=20, help="Number of bins per axis for throw heatmaps.")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -44,9 +46,87 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
+import math
+from itertools import combinations as _combinations
+
 import h12_bullet_time.tasks  # noqa: F401
 from h12_bullet_time.sensors.capacitive_sensor import CapacitiveSensor
 from h12_bullet_time.sensors.tof_sensor import TofSensor
+
+import h12_bullet_time.tasks.manager_based.h12_bullet_time.mdp.events as _throw_events
+if args_cli.throw_log_file:
+    _throw_events._throw_logging_enabled = True
+
+# ── Throw-parameter binning for heatmap accumulation ─────────────────────────
+# (name, min, max) — ranges chosen wider than physical limits to avoid clipping
+_THROW_BIN_PARAMS = [
+    ("azimuth_deg", 0.0, 360.0),
+    ("spawn_distance", 0.5, 2.5),
+    ("target_z", 0.3, 2.0),
+    ("speed", 1.0, 10.0),
+    ("elevation_deg", 10.0, 80.0),
+]
+_THROW_PARAM_PAIRS = list(_combinations(range(len(_THROW_BIN_PARAMS)), 2))
+
+
+def _throw_vals(tp):
+    return {
+        "azimuth_deg": math.degrees(tp["azimuth_rad"]),
+        "spawn_distance": tp["spawn_distance"],
+        "target_z": tp["target_z"],
+        "speed": tp["speed"],
+        "elevation_deg": math.degrees(tp["elevation_rad"]),
+    }
+
+
+def _bin_idx(value, lo, hi, n):
+    return max(0, min(n - 1, int((value - lo) / (hi - lo) * n)))
+
+
+def _init_throw_bins(n):
+    hm = {}
+    for i, j in _THROW_PARAM_PAIRS:
+        key = f"{_THROW_BIN_PARAMS[i][0]}__{_THROW_BIN_PARAMS[j][0]}"
+        hm[key] = {"successes": [[0] * n for _ in range(n)], "totals": [[0] * n for _ in range(n)]}
+    mg = {}
+    for name, _, _ in _THROW_BIN_PARAMS:
+        mg[name] = {"successes": [0] * n, "totals": [0] * n}
+    return hm, mg
+
+
+def _record_throw(tp, survived, hm, mg, n):
+    vals = _throw_vals(tp)
+    bi = {}
+    for name, lo, hi in _THROW_BIN_PARAMS:
+        bi[name] = _bin_idx(vals[name], lo, hi, n)
+    s = int(survived)
+    for name, _, _ in _THROW_BIN_PARAMS:
+        b = bi[name]
+        mg[name]["totals"][b] += 1
+        mg[name]["successes"][b] += s
+    for i, j in _THROW_PARAM_PAIRS:
+        key = f"{_THROW_BIN_PARAMS[i][0]}__{_THROW_BIN_PARAMS[j][0]}"
+        ci, cj = bi[_THROW_BIN_PARAMS[i][0]], bi[_THROW_BIN_PARAMS[j][0]]
+        hm[key]["totals"][cj][ci] += 1
+        hm[key]["successes"][cj][ci] += s
+
+
+def _merge_bins(dst_hm, dst_mg, src_hm, src_mg):
+    for k in src_hm:
+        if k not in dst_hm:
+            dst_hm[k] = src_hm[k]
+        else:
+            for r in range(len(src_hm[k]["totals"])):
+                for c in range(len(src_hm[k]["totals"][r])):
+                    dst_hm[k]["totals"][r][c] += src_hm[k]["totals"][r][c]
+                    dst_hm[k]["successes"][r][c] += src_hm[k]["successes"][r][c]
+    for k in src_mg:
+        if k not in dst_mg:
+            dst_mg[k] = src_mg[k]
+        else:
+            for b in range(len(src_mg[k]["totals"])):
+                dst_mg[k]["totals"][b] += src_mg[k]["totals"][b]
+                dst_mg[k]["successes"][b] += src_mg[k]["successes"][b]
 
 
 def get_min_sensor_distances(env) -> torch.Tensor:
@@ -126,8 +206,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     
     obs = env.get_observations()
     step = 0
-    
+
+    n_bins = args_cli.throw_bins
+    throw_hm, throw_mg = _init_throw_bins(n_bins) if args_cli.throw_log_file else (None, None)
+
     while len(completed_min_dists) < target_episodes:
+        throw_snapshot = None
+        if throw_hm is not None:
+            uw = env.unwrapped
+            if hasattr(uw, "_current_throws"):
+                throw_snapshot = [len(uw._current_throws[i]) for i in range(num_envs)]
         with torch.inference_mode():
             actions = policy(obs)
             obs, rewards, dones, infos = env.step(actions)
@@ -167,6 +255,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
                 # Fallback: if time-out info is unavailable, mark as not stayed-alive
                 stayed_alive = False
             completed_stayed_alive.append(stayed_alive)
+            if throw_hm is not None and throw_snapshot is not None:
+                eid = int(idx.item())
+                uw = env.unwrapped
+                if hasattr(uw, "_current_throws"):
+                    cut = throw_snapshot[eid]
+                    for tp in uw._current_throws[eid][:cut]:
+                        _record_throw(tp, stayed_alive, throw_hm, throw_mg, n_bins)
+                    uw._current_throws[eid] = uw._current_throws[eid][cut:]
             env_ep_count[idx] += 1
             # Reset for next episode
             episode_rewards[idx] = 0
@@ -243,6 +339,42 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     for k, v in stats.items():
         print(f"  {k}: {v}")
     print(f"\nResults saved to: {args_cli.output_file}")
+
+    # ── Save binned throw heatmap data (merge with existing file) ────────────
+    if args_cli.throw_log_file and throw_hm is not None:
+        tl_path = args_cli.throw_log_file
+        os.makedirs(os.path.dirname(tl_path) or ".", exist_ok=True)
+        config_key = (
+            f"{os.environ.get('ABLATION_SENSORS', 'unknown')}"
+            f"|{os.environ.get('ABLATION_MAX_RANGE', 'unknown')}"
+        )
+        bin_cfg = {p[0]: {"min": p[1], "max": p[2], "n_bins": n_bins} for p in _THROW_BIN_PARAMS}
+        new_entry = {
+            "ablation_sensors": os.environ.get("ABLATION_SENSORS", ""),
+            "ablation_max_range": os.environ.get("ABLATION_MAX_RANGE", ""),
+            "heatmaps": throw_hm,
+            "marginals": throw_mg,
+        }
+        existing = {"bin_config": bin_cfg, "configs": {}}
+        if os.path.exists(tl_path):
+            try:
+                with open(tl_path) as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+        if config_key in existing.get("configs", {}):
+            _merge_bins(
+                existing["configs"][config_key]["heatmaps"],
+                existing["configs"][config_key]["marginals"],
+                throw_hm, throw_mg,
+            )
+        else:
+            existing.setdefault("configs", {})[config_key] = new_entry
+        existing["bin_config"] = bin_cfg
+        with open(tl_path, "w") as f:
+            json.dump(existing, f)
+        total_t = sum(sum(r) for r in next(iter(throw_hm.values()))["totals"])
+        print(f"[EVAL] Saved {total_t} binned throws to {tl_path}")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 
 from isaaclab.managers import SceneEntityCfg
 
+_throw_logging_enabled = False
+
 
 def launch_projectile(
     env: ManagerBasedRLEnv,
@@ -195,6 +197,24 @@ def launch_projectile_radial(
 
     proj.write_root_pose_to_sim(pose, env_ids)
     proj.write_root_velocity_to_sim(velocity, env_ids)
+
+    if _throw_logging_enabled:
+        if not hasattr(env, "_current_throws"):
+            env._current_throws = [[] for _ in range(env.num_envs)]
+        az_cpu = azimuth.cpu().tolist()
+        d_cpu = spawn_distance_per_env.cpu().tolist()
+        tz_cpu = target_z.cpu().tolist()
+        sp_cpu = speed.cpu().tolist()
+        el_cpu = elevation.cpu().tolist()
+        for i, eid in enumerate(env_ids.cpu().tolist()):
+            env._current_throws[eid].append({
+                "azimuth_rad": az_cpu[i],
+                "spawn_distance": d_cpu[i],
+                "target_z": tz_cpu[i],
+                "speed": sp_cpu[i],
+                "elevation_rad": el_cpu[i],
+            })
+
 
 def launch_projectile_target_sampling(
     env: ManagerBasedRLEnv,
