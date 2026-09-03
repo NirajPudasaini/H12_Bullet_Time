@@ -399,9 +399,9 @@ if __name__ == "__main__":
             # "FIELD:DIST:X",
             # "FIELD:BIN:X",
             # "FIELD:EVENT:X",
-            "FIELD:TRUE_POS:X",
+            # "FIELD:TRUE_POS:X",
             # Ray sensor (8x8 grid)
-            # "RAY:DIST:X",
+            "RAY:DIST:X",
             # "RAY:MINDIST:X",
             # "RAY:BIN:X",
             # "RAY:MINBIN:X",
@@ -432,17 +432,17 @@ if __name__ == "__main__":
 
         # Test case
         # "ABLATION_SENSORS": ["FIELD:EVENT:X;FIELD:MINDIST:X"],
-        "ABLATION_MAX_RANGE": [2.0],
+        # "ABLATION_MAX_RANGE": [2.0],
         
     }
     
     run_ablation_study(
         param_grid=PARAM_GRID,
         num_envs=4096,
-        training_iters=3000,
+        training_iters=5,
         headless=True,
         task="Template-H12-Survive-Time-HYBRID",
         verbose=False,
-        save_video=True,
+        save_video=False,
         video_length=1000,
     )

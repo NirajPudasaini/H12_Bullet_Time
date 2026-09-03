@@ -48,34 +48,13 @@ sys.argv = [sys.argv[0]] + hydra_args
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Check for minimum supported RSL-RL version."""
-
-import importlib.metadata as metadata
-import platform
-
-from packaging import version
-
-# check minimum supported rsl-rl version
-RSL_RL_VERSION = "3.0.1"
-installed_version = metadata.version("rsl-rl-lib")
-if version.parse(installed_version) < version.parse(RSL_RL_VERSION):
-    if platform.system() == "Windows":
-        cmd = [r".\isaaclab.bat", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
-    else:
-        cmd = ["./isaaclab.sh", "-p", "-m", "pip", "install", f"rsl-rl-lib=={RSL_RL_VERSION}"]
-    print(
-        f"Please install the correct version of RSL-RL.\nExisting version is: '{installed_version}'"
-        f" and required version is: '{RSL_RL_VERSION}'.\nTo install the correct version, run:"
-        f"\n\n\t{' '.join(cmd)}\n"
-    )
-    exit(1)
-
 """Rest everything follows."""
 
 import gymnasium as gym
 import os
 import torch
 from datetime import datetime
+from importlib.metadata import version as pkg_version
 
 import omni
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
@@ -90,14 +69,12 @@ from isaaclab.envs import (
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 
-# Try importing from isaaclab_rl first, fallback to rsl_rl directly
-try:
-    from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper
-except ImportError:
-    # Fallback for different Isaac Lab versions
-    from rsl_rl.runners import OnPolicyRunner
-    RslRlBaseRunnerCfg = None  # Will use dict-based config
-    RslRlVecEnvWrapper = None  # Will skip wrapping if not available
+from isaaclab_rl.rsl_rl import (
+    RslRlBaseRunnerCfg,
+    RslRlVecEnvWrapper,
+    handle_deprecated_rsl_rl_cfg,
+    handle_deprecated_rsl_rl_checkpoint,
+)
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
@@ -116,6 +93,7 @@ def main(env_cfg, agent_cfg):
     """Train with RSL-RL agent."""
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, pkg_version("rsl-rl-lib"))
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
@@ -167,8 +145,9 @@ def main(env_cfg, agent_cfg):
         env = multi_agent_to_single_agent(env)
 
     # save resume path before creating a new log_dir
-    if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+    if agent_cfg.resume:
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        resume_path = handle_deprecated_rsl_rl_checkpoint(resume_path, pkg_version("rsl-rl-lib"))
 
     # wrap for video recording
     if args_cli.video:
@@ -182,18 +161,21 @@ def main(env_cfg, agent_cfg):
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # wrap around environment for rsl-rl (if wrapper is available)
-    if RslRlVecEnvWrapper is not None:
-        env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    # wrap around environment for rsl-rl
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    # create runner from rsl-rl (use OnPolicyRunner for PPO)
-    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    # create runner from rsl-rl
+    if agent_cfg.class_name == "OnPolicyRunner":
+        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    elif agent_cfg.class_name == "DistillationRunner":
+        runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    else:
+        raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint if resuming
     if agent_cfg.resume:
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-        # load previously trained model
         runner.load(resume_path)
 
     # dump the configuration into log-directory

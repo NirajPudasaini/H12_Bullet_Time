@@ -4,9 +4,12 @@
 
 import argparse
 import os
+import re
 import sys
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
+from importlib.metadata import version as pkg_version
 
 import cli_args  # isort: skip
 
@@ -27,8 +30,9 @@ parser.add_argument("--min_traj_length", type=int, default=10, help="Discard tra
 parser.add_argument("--output_dir", type=str, default="collected_data", help="Output directory for H5 files.")
 parser.add_argument("--trajs_per_file", type=int, default=1000, help="Trajectories per H5 file.")
 parser.add_argument(
-    "--sensor_type", type=str, default=None, choices=["CAP", "TOF", "CAP_TOF"],
-    help="Sensor type — must match the config used during training (sets ABLATION_SENSOR_TYPE).",
+    "--sensors", type=str, default=None,
+    help="Sensor spec 'SHAPE:SIGNAL:MAX_RANGE[;...]' with SHAPE in {FIELD, RAY, CONE}, e.g. 'RAY:DIST:X'. "
+         "Must match the spec used during training (sets ABLATION_SENSORS).",
 )
 parser.add_argument("--max_range", type=float, default=None, help="Sensor max range (sets ABLATION_MAX_RANGE).")
 parser.add_argument("--static", action="store_true", default=False, help="Lock all robot joints; robot will not move or fall.")
@@ -36,12 +40,42 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-# Propagate ablation env vars BEFORE environment creation so the config picks them up
-if args_cli.sensor_type:
-    os.environ["ABLATION_SENSOR_TYPE"] = args_cli.sensor_type
+_RUN_TS = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
+
+
+def _latest_run_dir(log_root):
+    root = Path(log_root)
+    if not root.is_dir():
+        return None
+    runs = [p for p in root.iterdir() if p.is_dir()]
+    return max(runs, key=lambda p: p.stat().st_mtime) if runs else None
+
+
+def _sensors_from_run_name(name):
+    m = _RUN_TS.match(name)
+    if not m:
+        return None
+    tag = name[m.end():].lstrip("_")
+    return tag.replace("_", ";").replace("-", ":") if tag else None
+
+
+# Sensor spec must be set before hydra imports the env cfg. Infer it from the latest
+# trained run unless the user passed --sensors / --load_run / --checkpoint.
+_log_root = os.path.abspath(os.path.join("logs", "rsl_rl", "h12-bullet-time-ppo"))
+if not args_cli.checkpoint and args_cli.load_run is None:
+    _latest = _latest_run_dir(_log_root)
+    if _latest is not None:
+        args_cli.load_run = _latest.name
+        print(f"[INFO] Using latest run: {_latest.name}")
+        if not args_cli.sensors:
+            inferred = _sensors_from_run_name(_latest.name)
+            if inferred:
+                args_cli.sensors = inferred
+                print(f"[INFO] Inferred --sensors {inferred}")
+if args_cli.sensors:
+    os.environ["ABLATION_SENSORS"] = args_cli.sensors
 if args_cli.max_range is not None:
     os.environ["ABLATION_MAX_RANGE"] = str(args_cli.max_range)
-
 sys.argv = [sys.argv[0]] + hydra_args
 
 app_launcher = AppLauncher(args_cli)
@@ -65,18 +99,44 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
     multi_agent_to_single_agent,
 )
+from isaaclab.sensors import ContactSensor
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
 
-from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_rl.rsl_rl import (
+    RslRlBaseRunnerCfg,
+    RslRlVecEnvWrapper,
+    handle_deprecated_rsl_rl_cfg,
+    handle_deprecated_rsl_rl_checkpoint,
+)
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import h12_bullet_time.tasks  # noqa: F401
-from h12_bullet_time.sensors.capacitive_sensor import CapacitiveSensor
-from h12_bullet_time.sensors.tof_sensor import TofSensor
+from h12_bullet_time.sensors import ConeSensor, FieldSensor, RaySensor
+
+_SENSOR_SHAPES = ("field", "ray", "cone")
+
+
+def link_from_sensor_name(name):
+    """'ray_0_left_elbow' -> 'left_elbow'; the hybrid env names sensors '{shape}_{group}_{link}'."""
+    parts = name.split("_")
+    if len(parts) > 2 and parts[0] in _SENSOR_SHAPES and parts[1].isdigit():
+        return "_".join(parts[2:])
+    return name
+
+
+_TOF_RAW_MAX = 4000
+
+
+def dist_m_to_tof_raw(dist_m):
+    return np.clip(np.rint(np.asarray(dist_m) * 1000.0), 0, _TOF_RAW_MAX).astype(np.int32)
+
+
+def cap_to_raw(values):
+    return np.rint(np.asarray(values)).astype(np.int32)
 
 
 class TrajectoryBuffer:
@@ -92,15 +152,16 @@ class TrajectoryBuffer:
     def step_done(self):
         self.length += 1
 
-    def reset(self):
-        self.data = defaultdict(list)
-        self.length = 0
-
     def to_numpy(self):
         return {k: np.stack(v) for k, v in self.data.items()}
 
 
-def save_trajectories(trajs, filepath, traj_offset, metadata=None, probe_radius=None, sensor_static=None):
+def _write_ds(group, name, arr, dtype, compression="gzip"):
+    group.create_dataset(name, data=np.asarray(arr, dtype=dtype), compression=compression)
+
+
+def save_trajectories(trajs, filepath, traj_offset, metadata=None, probe_radius=None,
+                      sensor_static=None, fps=None, joint_names=None):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with h5py.File(filepath, "w") as f:
         if metadata:
@@ -110,40 +171,41 @@ def save_trajectories(trajs, filepath, traj_offset, metadata=None, probe_radius=
         for i, traj in enumerate(trajs):
             traj_key = f"traj_{traj_offset + i + 1:06d}"
             tg = traj_grp.create_group(traj_key)
+            if fps is not None:
+                tg.attrs["fps"] = float(fps)
             obs_grp = tg.create_group("observations")
             data = traj.to_numpy()
 
             for key, arr in data.items():
                 if key.endswith(("_link_pos_w", "_link_quat_w")):
                     continue
-                if key.startswith("depth_sensor_"):
-                    sg = obs_grp.create_group(key)
-                    sg.create_dataset(
-                        "depth_to_camera_normalized",
-                        data=arr[:, np.newaxis, :, :, np.newaxis].astype(np.float32),
-                        compression="gzip",
-                    )
+                if key.startswith("tof_sensor_"):
+                    sg = obs_grp.require_group("tof").create_group(key)
+                    _write_ds(sg, "tof_data_raw", arr, np.int32)
                 elif key.startswith("cap_sensor_"):
-                    sg = obs_grp.create_group(key)
-                    sg.create_dataset(
-                        "capacitance_normalized",
-                        data=arr.astype(np.float32),
-                        compression="gzip",
-                    )
+                    sg = obs_grp.require_group("cap").create_group(key)
+                    _write_ds(sg, "cap_data_raw", arr, np.int32)
 
             if "actions" in data:
-                tg.create_dataset("actions", data=data["actions"].astype(np.float32), compression="gzip")
+                _write_ds(tg, "actions", data["actions"], np.float32)
 
             state_grp = tg.create_group("robot_state")
+            if joint_names is not None:
+                state_grp.attrs["joint_names"] = list(joint_names)
             for key in ("joint_pos", "joint_vel", "base_pos", "base_quat", "base_lin_vel", "base_ang_vel"):
                 if key in data:
-                    state_grp.create_dataset(key, data=data[key].astype(np.float32), compression="gzip")
+                    _write_ds(state_grp, key, data[key], np.float32)
 
             if "probe_pos" in data:
                 probe_grp = tg.create_group("probe")
-                probe_grp.create_dataset("position", data=data["probe_pos"].astype(np.float32), compression="gzip")
+                _write_ds(probe_grp, "position", data["probe_pos"], np.float32)
                 if probe_radius is not None:
                     probe_grp.attrs["radius"] = float(probe_radius)
+                if "probe_in_contact" in data:
+                    in_c = data["probe_in_contact"]
+                    if in_c.ndim == 1:
+                        in_c = in_c[:, None]
+                    _write_ds(probe_grp, "in_contact", in_c, np.bool_)
 
             if sensor_static:
                 st_grp = tg.create_group("sensor_transforms")
@@ -153,8 +215,8 @@ def save_trajectories(trajs, filepath, traj_offset, metadata=None, probe_radius=
                     sg.create_dataset("relative_quat", data=sinfo["relative_quat"].astype(np.float32))
                     lp_key, lq_key = f"{sname}_link_pos_w", f"{sname}_link_quat_w"
                     if lp_key in data:
-                        sg.create_dataset("link_pos_w", data=data[lp_key].astype(np.float32), compression="gzip")
-                        sg.create_dataset("link_quat_w", data=data[lq_key].astype(np.float32), compression="gzip")
+                        _write_ds(sg, "link_pos_w", data[lp_key], np.float32)
+                        _write_ds(sg, "link_quat_w", data[lq_key], np.float32)
 
     print(f"[INFO] Saved {len(trajs)} trajectories to {filepath}")
 
@@ -166,6 +228,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     train_task_name = task_name.replace("-Play", "")
 
     agent_cfg: RslRlBaseRunnerCfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    _rsl_rl_version = pkg_version("rsl-rl-lib")
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, _rsl_rl_version)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
@@ -190,6 +254,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env = multi_agent_to_single_agent(env)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
+    resume_path = handle_deprecated_rsl_rl_checkpoint(resume_path, _rsl_rl_version)
     print(f"[INFO] Loading model checkpoint from: {resume_path}")
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
@@ -210,37 +275,56 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     projectile = unwrapped.scene["Projectile"]
     projectile_radius = projectile.cfg.spawn.radius
 
-    # Discover sensors
-    tof_sensors, cap_sensors, tof_pixel_counts = {}, {}, {}
+    # Discover sensors. RAY sensors report a pixel grid per element; FIELD/CONE report one
+    # scalar per element. ConeSensor subclasses FieldSensor, so it is matched by the same branch.
+    ray_sensors, field_sensors, ray_pixel_counts, contact_sensors = {}, {}, {}, {}
     if hasattr(unwrapped.scene, "_sensors"):
         for name, sensor in unwrapped.scene._sensors.items():
-            if isinstance(sensor, TofSensor):
-                tof_sensors[name] = sensor
-                tof_pixel_counts[name] = sensor.cfg.pixel_count
-            elif isinstance(sensor, CapacitiveSensor):
-                cap_sensors[name] = sensor
+            if isinstance(sensor, RaySensor):
+                ray_sensors[name] = sensor
+                ray_pixel_counts[name] = sensor.cfg.pixel_count
+            elif isinstance(sensor, (FieldSensor, ConeSensor)):
+                field_sensors[name] = sensor
+            elif isinstance(sensor, ContactSensor):
+                contact_sensors[name] = sensor
 
-    sensor_type = os.environ.get("ABLATION_SENSOR_TYPE", "CAP")
-    print(f"[INFO] sensor_type={sensor_type} | {len(tof_sensors)} ToF, {len(cap_sensors)} cap | {num_envs} envs")
-    if not tof_sensors and not cap_sensors:
-        print("[WARN] No sensors found! Verify --sensor_type matches your environment config.")
+    # DATA.md names: tof_sensor_{link}_{index}, cap_sensor_{link}_{index}
+    h5_base = {}
+    for name in list(ray_sensors) + list(field_sensors):
+        kind = "tof" if name in ray_sensors else "cap"
+        base = f"{kind}_sensor_{link_from_sensor_name(name)}"
+        if base in h5_base.values():
+            base = f"{kind}_sensor_{name}"
+            print(f"[WARN] Sensor '{name}' collides with another group; storing it as '{base}'")
+        h5_base[name] = base
+
+    sensors_spec = os.environ.get("ABLATION_SENSORS", "FIELD:MINDIST:4.0")
+    print(f"[INFO] sensors={sensors_spec} | {len(ray_sensors)} ray, {len(field_sensors)} field/cone | "
+          f"{len(contact_sensors)} contact | {num_envs} envs")
+    if not ray_sensors and not field_sensors:
+        print("[WARN] No sensors found! Verify --sensors matches your environment config.")
 
     # Gather static sensor transforms (relative to parent link)
     sensor_static_info = {}
-    all_sensors = {**cap_sensors, **tof_sensors}
+    all_sensors = {**field_sensors, **ray_sensors}
     for name, sensor in all_sensors.items():
         rel_pos = sensor._relative_sensor_pos.cpu().numpy()
-        if hasattr(sensor, "_relative_sensor_quat"):
+        if name in field_sensors:
+            rel_quat = np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (rel_pos.shape[0], 1))
+        elif hasattr(sensor, "_relative_sensor_quat"):
             rel_quat = sensor._relative_sensor_quat.cpu().numpy()
         else:
-            rel_quat = np.tile([1.0, 0.0, 0.0, 0.0], (rel_pos.shape[0], 1)).astype(np.float32)
-        sensor_static_info[name] = {"relative_pos": rel_pos, "relative_quat": rel_quat}
+            rel_quat = np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (rel_pos.shape[0], 1))
+        sensor_static_info[h5_base[name]] = {"relative_pos": rel_pos, "relative_quat": rel_quat}
 
     # Output setup
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_subdir = os.path.join(args_cli.output_dir, f"roboset_{timestamp}")
-    metadata = {"task": args_cli.task, "num_envs": num_envs, "timestamp": timestamp, "sensor_type": sensor_type,
-                "joint_names": robot.joint_names}
+    step_dt = getattr(unwrapped, "step_dt", None) or (unwrapped.cfg.sim.dt * unwrapped.cfg.decimation)
+    fps = 1.0 / float(step_dt)
+    metadata = {"task": args_cli.task, "robot": "h12", "timestamp": timestamp}
+    save_kw = dict(metadata=metadata, probe_radius=projectile_radius, sensor_static=sensor_static_info,
+                   fps=fps, joint_names=robot.joint_names)
 
     # Collection loop
     buffers = [TrajectoryBuffer() for _ in range(num_envs)]
@@ -258,10 +342,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     while traj_counter < args_cli.num_trajectories and simulation_app.is_running():
         with torch.inference_mode():
             # Batch GPU -> CPU transfers (one per sensor + robot state)
-            tof_snaps = {n: s.data.dist_est_normalized.cpu().numpy() for n, s in tof_sensors.items()}
-            cap_snaps = {n: s.data.dist_est_normalized.cpu().numpy() for n, s in cap_sensors.items()}
+            # Reduce over targets so each physical sensor writes one stream (min dist / max cap).
+            ray_snaps = {n: s.data.dist_est.cpu().numpy().min(axis=2) for n, s in ray_sensors.items()}
+            field_snaps = {n: s.data.capacitance_values.cpu().numpy().max(axis=2) for n, s in field_sensors.items()}
             link_tf = {
-                n: (s.data.source_pos_w.cpu().numpy(), s.data.source_quat_w.cpu().numpy())
+                h5_base[n]: (s.data.source_pos_w.cpu().numpy(), s.data.source_quat_w.cpu().numpy())
                 for n, s in all_sensors.items()
             }
             jp = robot.data.joint_pos.cpu().numpy()
@@ -271,6 +356,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             blv = robot.data.root_lin_vel_w.cpu().numpy()
             bav = robot.data.root_ang_vel_w.cpu().numpy()
             pp = projectile.data.root_pos_w.cpu().numpy()
+
+            in_contact_np = None
+            if contact_sensors:
+                in_contact_np = np.zeros(num_envs, dtype=bool)
+                for s in contact_sensors.values():
+                    nf = s.data.net_forces_w
+                    if nf is None:
+                        continue
+                    f = nf.cpu().numpy().reshape(num_envs, -1, 3)
+                    in_contact_np |= (np.linalg.norm(f, axis=-1) > 1e-6).any(axis=1)
 
             bp -= env_origins
             pp -= env_origins
@@ -283,25 +378,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # Distribute batched data into per-env buffers
             for ei in range(num_envs):
                 buf = buffers[ei]
-                # ToF -> depth images per sensor position
-                for name, snap in tof_snaps.items():
-                    pc = tof_pixel_counts[name]
-                    link = name.replace("tof_sensor_", "")
-                    n_targets = snap.shape[2]
+                for name, snap in ray_snaps.items():
+                    pc = ray_pixel_counts[name]
+                    base = h5_base[name]
                     for si in range(snap.shape[1]):
-                        for mi in range(n_targets):
-                            suffix = f"_t{mi}" if n_targets > 1 else ""
-                            buf.append(
-                                f"depth_sensor_{link}_{si}{suffix}",
-                                snap[ei, si, mi].reshape(pc, pc),
-                            )
-                # Cap -> 1D vector per sensor
-                for name, snap in cap_snaps.items():
-                    n_targets = snap.shape[2]
-                    for mi in range(n_targets):
-                        suffix = f"_t{mi}" if n_targets > 1 else ""
-                        buf.append(f"{name}{suffix}", snap[ei, :, mi])
-                # Robot state
+                        buf.append(f"{base}_{si}", dist_m_to_tof_raw(snap[ei, si]).reshape(pc, pc))
+                for name, snap in field_snaps.items():
+                    buf.append(f"{h5_base[name]}_0", cap_to_raw(snap[ei]))
                 buf.append("joint_pos", jp[ei])
                 buf.append("joint_vel", jv[ei])
                 buf.append("base_pos", bp[ei])
@@ -309,6 +392,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 buf.append("base_lin_vel", blv[ei])
                 buf.append("base_ang_vel", bav[ei])
                 buf.append("probe_pos", pp[ei])
+                if in_contact_np is not None:
+                    buf.append("probe_in_contact", np.array([in_contact_np[ei]]))
                 for sname, (lp, lq) in link_tf.items():
                     buf.append(f"{sname}_link_pos_w", lp[ei])
                     buf.append(f"{sname}_link_quat_w", lq[ei])
@@ -336,24 +421,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                         traj_counter += 1
                         if traj_counter % 10 == 0:
                             print(f"[INFO] {traj_counter}/{args_cli.num_trajectories} trajectories collected")
-                        # Flush to disk periodically
                         if len(completed) >= args_cli.trajs_per_file:
                             fp = os.path.join(
                                 output_subdir, f"roboset_{timestamp}_part{file_counter:03d}.h5"
                             )
-                            save_trajectories(
-                                completed, fp, file_counter * args_cli.trajs_per_file, metadata, projectile_radius, sensor_static_info
-                            )
+                            save_trajectories(completed, fp, file_counter * args_cli.trajs_per_file, **save_kw)
                             completed = []
                             file_counter += 1
                         if traj_counter >= args_cli.num_trajectories:
                             break
                     buffers[ei] = TrajectoryBuffer()
 
-    # Save remaining trajectories
     if completed:
         fp = os.path.join(output_subdir, f"roboset_{timestamp}_part{file_counter:03d}.h5")
-        save_trajectories(completed, fp, file_counter * args_cli.trajs_per_file, metadata, projectile_radius, sensor_static_info)
+        save_trajectories(completed, fp, file_counter * args_cli.trajs_per_file, **save_kw)
 
     print(f"[INFO] Complete: {traj_counter} trajectories saved to {output_subdir}")
     env.close()

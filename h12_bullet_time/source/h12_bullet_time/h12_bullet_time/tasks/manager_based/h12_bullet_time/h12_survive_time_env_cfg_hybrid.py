@@ -75,6 +75,7 @@ _contact_scale = float(os.environ.get("ABLATION_CONTACT_SCALE", _DEFAULT_CONTACT
 _contact_threshold = float(os.environ.get("ABLATION_CONTACT_THRESHOLD", _DEFAULT_CONTACT_THRESHOLD))
 _projectile_mass = float(os.environ.get("ABLATION_PROJECTILE_MASS", _DEFAULT_PROJECTILE_MASS))
 _contact_termination = bool(os.environ.get("ABLATION_CONTACT_TERMINATION", _DEFAULT_CONTACT_TERMINATION))
+_track_contact_points = os.environ.get("ABLATION_TRACK_CONTACT_POINTS", "").lower() in ("1", "true", "yes")
 _termination_angle_threshold_deg = float(os.environ.get("ABLATION_TERMINATION_ANGLE_THRESHOLD_DEG", _DEFAULT_TERMINATION_ANGLE_THRESHOLD_DEG))
 _termination_height_threshold = float(os.environ.get("ABLATION_TERMINATION_HEIGHT_THRESHOLD", _DEFAULT_TERMINATION_HEIGHT_THRESHOLD))
 
@@ -146,7 +147,7 @@ _SENSOR_CFG_BUILDERS = {
         debug_vis=_debug_vis,
         max_range=max_range,
         projectile_radius=_projectile_radius,
-    ),
+    )
 }
 
 # ── Group specs by (shape, max_range) to deduplicate sensor instances ─────────
@@ -248,6 +249,8 @@ for link_name in _CONTACT_DETECTION_LINKS:
         update_period=0.0,
         history_length=1,
         force_threshold=1.0,
+        track_contact_points=_track_contact_points,
+        max_contact_data_count_per_prim=4,
     )
 
 # ── Attach sensors to scene class ────────────────────────────────────────────

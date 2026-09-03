@@ -11,6 +11,8 @@ from isaaclab.app import AppLauncher
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Example on using the raycaster sensor.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
+parser.add_argument("-v", "--vis", action="store_true", help="Enable sensor visualization markers.")
+parser.add_argument("-p", "--print_grid", action="store_true", help="Enable ASCII ToF grid printout.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -22,15 +24,14 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
+import time
+
 import torch
-import foxglove
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-from isaaclab.sensors import FrameTransformer, FrameTransformerCfg
 
 from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
 
@@ -170,7 +171,7 @@ def create_scene_config():
             ],
             relative_sensor_pos=sensor_positions,
             relative_sensor_quat=sensor_orientations,  # Pass orientations
-            debug_vis=True,
+            debug_vis=args_cli.vis,
             max_range=4.0,  # meters
             projectile_radius=projectile_radius,
         )
@@ -218,7 +219,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, sen
     sim_dt = sim.get_physics_dt()
     sim_time = 0.0
     count = 0
-    debug=True
+    wall_start = time.monotonic()
+    last_wall = wall_start
+    last_count = 0
 
     print("[INFO]: Simulation running... Press Ctrl+C to exit.")
 
@@ -238,9 +241,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, sen
 
         # Move cube in sine wave motion
         cube_prim = scene["moving_cube"]
-        cube_pos = torch.tensor([[1.0, 0.0, 0.15]], dtype=torch.float32)  # 0.15 = half of cube height
+        cube_pos = torch.tensor([[1.0, 0.0, 0.15]], dtype=torch.float32, device=scene.device)  # 0.15 = half of cube height
         # Use identity quaternion for orientation
-        cube_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32)  # [w, x, y, z]
+        cube_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32, device=scene.device)  # [w, x, y, z]
         cube_prim.set_world_poses(positions=cube_pos, orientations=cube_quat)
 
         # Apply default robot command
@@ -254,45 +257,42 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, sen
         count += 1
         scene.update(sim_dt)
 
-        # Debug visualization - log data from sensors
         if count % 10 == 0:
-            print("\n" + "="*120)
-            print(f"Simulation Time: {sim_time:.3f}s | Step: {count}")
-            print("="*120)
-            print(f"{'Link Name':<35} {'Num Sensors':<12} {'Num Detections':<12} {'Avg ToF Distance (m)':<12} {'TOF Error (m)':<12}")
-            print("-"*120)
-            
+            now = time.monotonic()
+            real_elapsed = now - wall_start
+            fps = (count - last_count) / max(now - last_wall, 1e-9)
+            rtf = sim_time / real_elapsed if real_elapsed > 0 else 0.0
+            last_wall = now
+            last_count = count
+
+            print("\n" + "=" * 120)
+            print(
+                f"sim {sim_time:.2f}s | real {real_elapsed:.2f}s | "
+                f"RTF {rtf:.3f}x | FPS {fps:.1f}"
+            )
+            print(f"{'Link Name':<35} {'Num Sensors':<12} {'Num Detections':<12} {'Avg ToF Dist (m)':<18} {'TOF Error (m)':<12}")
+            print("-" * 120)
+
             for sensor_name in sensor_names:
                 sensor_data = scene[sensor_name].data
                 distances = sensor_data.raw_target_distances.cpu().numpy()
-                tof_distances = sensor_data.tof_distances.cpu().numpy()
-                
-                # Get statistics
+                tof_distances = sensor_data.raw_target_distances.cpu().numpy()
+
                 num_sensors = distances.shape[1] if len(distances.shape) > 1 else distances.shape[0]
                 num_detections = (~np.isnan(tof_distances)).sum()
-                tof_distances_error = np.nanmean(np.abs(tof_distances - distances))
                 avg_tof_distance = np.nanmean(tof_distances)
-                
-                # Clean up sensor name for display
+                tof_distances_error = np.nanmean(np.abs(tof_distances - distances))
                 display_name = sensor_name.replace("tof_sensor_", "")
-                
-                print(f"{display_name:<35} {num_sensors:<12} {num_detections:<12} {avg_tof_distance:<12.4f} {tof_distances_error:<12.4f}")
-                
-                # Print ToF grids as ASCII art if debug mode is enabled
-                if debug:
-                    print_tof_ascii_grid(tof_distances, scene[sensor_name].cfg.pixel_count, 
-                                        scene[sensor_name].cfg.max_range)
-            
-            print("="*120 + "\n")
-            
-            # foxglove.log(
-            #     "/tof_sensors",
-            #     {
-            #         "distances": sensor_data.target_distances.cpu().numpy().tolist(),
-            #         "capacitance_values": sensor_data.capacitance_values.cpu().numpy().tolist(),
-            #     },
-            #     log_time=int(sim_time * 1e6),
-            # )
+
+                print(f"{display_name:<35} {num_sensors:<12} {num_detections:<12} {avg_tof_distance:<18.4f} {tof_distances_error:<12.4f}")
+
+                if args_cli.print_grid:
+                    dist_grid = sensor_data.dist_est.cpu().numpy().copy()
+                    dist_grid[dist_grid >= scene[sensor_name].cfg.max_range] = np.nan
+                    print_tof_ascii_grid(dist_grid, scene[sensor_name].cfg.pixel_count,
+                                         scene[sensor_name].cfg.max_range)
+
+            print("=" * 120 + "\n")
 
 
     print("[INFO]: Simulation finished.")
