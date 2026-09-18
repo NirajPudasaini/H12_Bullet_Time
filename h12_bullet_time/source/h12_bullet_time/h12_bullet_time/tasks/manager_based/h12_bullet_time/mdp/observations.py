@@ -15,6 +15,7 @@ from isaaclab.envs.mdp import (
 __all__ = [
     "base_ang_vel", "joint_pos_rel", "joint_vel_rel", "projected_gravity", "last_action",
     "sensor_obs", "sensor_obs_all",
+    "tof_distances_obs",
     "projectile_position_relative", "projectile_velocity", "projectile_distance_obs",
 ]
 
@@ -100,6 +101,25 @@ def sensor_obs_all(env: ManagerBasedRLEnv, specs: list) -> torch.Tensor:
     if not all_data:
         return torch.zeros((env.num_envs, 0), device=env.device)
     return torch.cat(all_data, dim=1)
+
+
+def tof_distances_obs(
+    env: ManagerBasedRLEnv, max_range: float = 4.0, handle_nan: str = "replace_with_max"
+) -> torch.Tensor:
+    values = []
+    for name in sorted(getattr(env.scene, "_sensors", {})):
+        data = env.scene._sensors[name].data
+        distance = getattr(data, "dist_est", None)
+        if distance is not None:
+            values.append(distance.reshape(env.num_envs, -1))
+    if not values:
+        return torch.zeros((env.num_envs, 0), device=env.device)
+    output = torch.cat(values, dim=1)
+    if handle_nan == "replace_with_max":
+        output = torch.nan_to_num(output, nan=max_range, posinf=max_range, neginf=0.0)
+    elif handle_nan != "keep":
+        raise ValueError("handle_nan must be 'replace_with_max' or 'keep'")
+    return output
 
 
 def projectile_position_relative(env: ManagerBasedRLEnv, projectile_name: str = "Projectile") -> torch.Tensor:

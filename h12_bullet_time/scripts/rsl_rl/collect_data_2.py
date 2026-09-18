@@ -135,6 +135,36 @@ def dist_m_to_tof_raw(dist_m):
     return np.clip(np.rint(np.asarray(dist_m) * 1000.0), 0, _TOF_RAW_MAX).astype(np.int32)
 
 
+_CONTACT_TERM_FUNCS = ("multi_contact_termination", "contact_termination")
+
+
+def _contact_term_names(unwrapped):
+    tm = getattr(unwrapped, "termination_manager", None)
+    if tm is None:
+        return [], float(os.environ.get("ABLATION_CONTACT_THRESHOLD", 0.03))
+    names, threshold = [], float(os.environ.get("ABLATION_CONTACT_THRESHOLD", 0.03))
+    for name in tm.active_terms:
+        cfg = tm.get_term_cfg(name)
+        if getattr(cfg.func, "__name__", "") in _CONTACT_TERM_FUNCS:
+            names.append(name)
+            threshold = float(cfg.params.get("threshold", threshold))
+    return names, threshold
+
+
+def _projectile_in_contact(contact_sensors, num_envs, threshold):
+    """Same condition as mdp.multi_contact_termination: max |force_matrix_w| vs projectile."""
+    hit = None
+    for s in contact_sensors.values():
+        fm = s.data.force_matrix_w
+        if fm is None:
+            continue
+        mag = torch.linalg.norm(fm.reshape(num_envs, -1, 3), dim=-1).max(dim=1).values
+        hit = mag if hit is None else torch.maximum(hit, mag)
+    if hit is None:
+        return np.zeros(num_envs, dtype=bool)
+    return (hit > threshold).cpu().numpy()
+
+
 def cap_to_raw(values):
     return np.rint(np.asarray(values)).astype(np.int32)
 
@@ -298,9 +328,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print(f"[WARN] Sensor '{name}' collides with another group; storing it as '{base}'")
         h5_base[name] = base
 
+    contact_term_names, contact_threshold = _contact_term_names(unwrapped)
     sensors_spec = os.environ.get("ABLATION_SENSORS", "FIELD:MINDIST:4.0")
     print(f"[INFO] sensors={sensors_spec} | {len(ray_sensors)} ray, {len(field_sensors)} field/cone | "
           f"{len(contact_sensors)} contact | {num_envs} envs")
+    print(f"[INFO] probe/in_contact: force_matrix_w > {contact_threshold} N, terms={contact_term_names}")
     if not ray_sensors and not field_sensors:
         print("[WARN] No sensors found! Verify --sensors matches your environment config.")
 
@@ -357,15 +389,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             bav = robot.data.root_ang_vel_w.cpu().numpy()
             pp = projectile.data.root_pos_w.cpu().numpy()
 
-            in_contact_np = None
-            if contact_sensors:
-                in_contact_np = np.zeros(num_envs, dtype=bool)
-                for s in contact_sensors.values():
-                    nf = s.data.net_forces_w
-                    if nf is None:
-                        continue
-                    f = nf.cpu().numpy().reshape(num_envs, -1, 3)
-                    in_contact_np |= (np.linalg.norm(f, axis=-1) > 1e-6).any(axis=1)
+            in_contact_np = _projectile_in_contact(contact_sensors, num_envs, contact_threshold)
 
             bp -= env_origins
             pp -= env_origins
@@ -392,8 +416,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 buf.append("base_lin_vel", blv[ei])
                 buf.append("base_ang_vel", bav[ei])
                 buf.append("probe_pos", pp[ei])
-                if in_contact_np is not None:
-                    buf.append("probe_in_contact", np.array([in_contact_np[ei]]))
+                buf.append("probe_in_contact", np.array([in_contact_np[ei]]))
                 for sname, (lp, lq) in link_tf.items():
                     buf.append(f"{sname}_link_pos_w", lp[ei])
                     buf.append(f"{sname}_link_quat_w", lq[ei])
@@ -403,6 +426,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # Step environment
             obs, _, dones, _ = env.step(actions)
             dones_np = dones.cpu().numpy() if isinstance(dones, torch.Tensor) else np.asarray(dones)
+            tm = getattr(unwrapped, "termination_manager", None)
+            if tm is not None and contact_term_names:
+                contact_done = torch.zeros(num_envs, dtype=torch.bool, device=unwrapped.device)
+                for name in contact_term_names:
+                    contact_done |= tm.get_term(name)
+                for ei in np.flatnonzero(contact_done.cpu().numpy()):
+                    frames = buffers[ei].data.get("probe_in_contact")
+                    if frames:
+                        frames[-1] = np.array([True])
 
             if args_cli.static:
                 reset_ids = torch.where(torch.from_numpy(dones_np).to(_dev))[0]
