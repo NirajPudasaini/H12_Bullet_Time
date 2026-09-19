@@ -4,6 +4,7 @@
 
 import argparse
 import os
+import random
 import re
 import sys
 from pathlib import Path
@@ -23,6 +24,12 @@ parser.add_argument(
     "--agent", type=str, default="rsl_rl_cfg_entry_point", help="Name of the RL agent configuration entry point."
 )
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
+parser.add_argument(
+    "--random_seed",
+    action="store_true",
+    default=False,
+    help="Sample a unique random seed (overrides --seed) so this collection is not a deterministic replay.",
+)
 parser.add_argument("--use_pretrained_checkpoint", action="store_true")
 parser.add_argument("--num_trajectories", type=int, default=100, help="Total trajectories to collect.")
 parser.add_argument("--max_traj_length", type=int, default=5000, help="Max timesteps per trajectory.")
@@ -39,6 +46,9 @@ parser.add_argument("--static", action="store_true", default=False, help="Lock a
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+if args_cli.random_seed:
+    args_cli.seed = random.randint(0, 2**31 - 1)
+    print(f"[INFO] Using random seed {args_cli.seed}")
 
 _RUN_TS = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}")
 
@@ -331,7 +341,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     contact_term_names, contact_threshold = _contact_term_names(unwrapped)
     sensors_spec = os.environ.get("ABLATION_SENSORS", "FIELD:MINDIST:4.0")
     print(f"[INFO] sensors={sensors_spec} | {len(ray_sensors)} ray, {len(field_sensors)} field/cone | "
-          f"{len(contact_sensors)} contact | {num_envs} envs")
+          f"{len(contact_sensors)} contact | {num_envs} envs | seed={env_cfg.seed}")
     print(f"[INFO] probe/in_contact: force_matrix_w > {contact_threshold} N, terms={contact_term_names}")
     if not ray_sensors and not field_sensors:
         print("[WARN] No sensors found! Verify --sensors matches your environment config.")
@@ -354,7 +364,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     output_subdir = os.path.join(args_cli.output_dir, f"roboset_{timestamp}")
     step_dt = getattr(unwrapped, "step_dt", None) or (unwrapped.cfg.sim.dt * unwrapped.cfg.decimation)
     fps = 1.0 / float(step_dt)
-    metadata = {"task": args_cli.task, "robot": "h12", "timestamp": timestamp}
+    metadata = {"task": args_cli.task, "robot": "h12", "timestamp": timestamp, "seed": int(env_cfg.seed)}
     save_kw = dict(metadata=metadata, probe_radius=projectile_radius, sensor_static=sensor_static_info,
                    fps=fps, joint_names=robot.joint_names)
 

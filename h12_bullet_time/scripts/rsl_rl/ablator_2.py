@@ -1,6 +1,7 @@
-"""Ablation study runner for H12 Bullet Time environment."""
+"""Ablation study runner that trains, evaluates, and collects trajectories per config."""
 
 import os
+import random
 import subprocess
 import sys
 import json
@@ -130,6 +131,7 @@ class AblationResult:
     envs_per_s: float | None = None
     wm_size: int | None = None
     wm_name: str | None = None
+    traj_dir: str = ""
 
 
 def train_and_test(
@@ -158,8 +160,6 @@ def train_and_test(
         num_envs = int(params.get("ABLATION_NUM_ENVS", num_envs))
     
     sensor_tag = str(params.get("ABLATION_SENSORS", "")).replace(":", "-").replace(";", "_")
-    if use_wm:
-        sensor_tag = f"{sensor_tag}-WM" if sensor_tag else "WM"
     train_script = "train_wm.py" if use_wm else "train.py"
     if use_wm and task == "Template-H12-Survive-Time-HYBRID":
         task = "Template-H12-Survive-Time-WM"
@@ -293,10 +293,108 @@ def record_video(
         return False
 
 
+_TAG_SKIP = {"ABLATION_REPEAT"}
+
+
+def _ablation_tag(params: dict) -> str:
+    if not params:
+        return "default"
+    parts = []
+    for k, v in sorted(params.items()):
+        if k in _TAG_SKIP:
+            continue
+        key = k.removeprefix("ABLATION_").lower()
+        val = str(v).replace(":", "-").replace(";", "_").replace("/", "-").replace("\\", "-").replace(" ", "")
+        parts.append(f"{key}-{val}")
+    return "_".join(parts)
+
+
+def _latest_run_name(log_root: str) -> str | None:
+    if not log_root:
+        return None
+    root = Path(log_root)
+    if not root.is_dir():
+        return None
+    runs = [p for p in root.iterdir() if p.is_dir()]
+    if not runs:
+        return None
+    return max(runs, key=lambda p: p.stat().st_mtime).name
+
+
+def collect_trajectories(
+    task: str,
+    params: dict,
+    output_dir: str | Path,
+    num_trajectories: int = 100,
+    num_envs: int = 64,
+    load_run: str | None = None,
+    seed: int | None = None,
+    random_seed: bool = False,
+    headless: bool = True,
+    verbose: bool = True,
+) -> str:
+    """Collect H5 trajectories for one ablation config via collect_data_2.py."""
+    script_dir = Path(__file__).parent
+    dest = Path(output_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    dump = dict(params)
+    if random_seed:
+        dump["_collect_random_seed"] = True
+    elif seed is not None:
+        dump["_collect_seed"] = seed
+    with open(dest / "params.json", "w") as f:
+        json.dump(dump, f, indent=2, default=str)
+
+    env = os.environ.copy()
+    for k, v in params.items():
+        env[k] = str(v)
+
+    cmd = [
+        "python", str(script_dir / "collect_data_2.py"),
+        "--task", task,
+        "--num_envs", str(num_envs),
+        "--num_trajectories", str(num_trajectories),
+        "--output_dir", str(dest),
+    ]
+    sensors = params.get("ABLATION_SENSORS")
+    if sensors:
+        cmd.extend(["--sensors", str(sensors)])
+    max_range = params.get("ABLATION_MAX_RANGE")
+    if max_range is not None and max_range != "":
+        cmd.extend(["--max_range", str(max_range)])
+    if load_run:
+        cmd.extend(["--load_run", load_run])
+    if random_seed:
+        cmd.append("--random_seed")
+    elif seed is not None:
+        cmd.extend(["--seed", str(seed)])
+    if headless:
+        cmd.append("--headless")
+
+    seed_msg = "random seed" if random_seed else f"seed={seed}"
+    print(f"[ABLATION] Collecting {num_trajectories} trajectories ({seed_msg}) -> {dest}")
+    rc, _ = run_cmd(cmd, env, verbose=verbose)
+    if rc != 0:
+        print(f"[ABLATION] Trajectory collection failed with code {rc}")
+        return ""
+    print(f"[ABLATION] Trajectories saved to {dest}")
+    return str(dest)
+
+
+def _repeat_dest(collect_output_dir: str | Path, params: dict, collect_repeats: int, rep: int) -> Path:
+    dest_root = Path(collect_output_dir) / _ablation_tag(params)
+    return dest_root / f"repeat-{rep:03d}" if collect_repeats > 1 else dest_root
+
+
+def _has_h5(path: Path) -> bool:
+    return path.is_dir() and any(path.rglob("*.h5"))
+
+
 def load_cached_results(
     output_folder: str,
     combinations: list[dict],
     defaults: dict,
+    require_traj: bool = False,
 ) -> tuple[list[dict], list[AblationResult]]:
     """Load cached results from previous ablation runs."""
     output_path = Path(output_folder)
@@ -342,10 +440,15 @@ def load_cached_results(
         for existing in existing_results:
             existing_params = existing.get("params", {})
             normalized_existing = {k: normalize_value(v) for k, v in {**defaults, **existing_params}.items()}
+            normalized_full.setdefault("ABLATION_REPEAT", 0)
+            normalized_existing.setdefault("ABLATION_REPEAT", 0)
             
             if normalized_full == normalized_existing:
                 has_eval = bool(existing.get("test_metrics"))
                 has_wm = existing.get("wm_name") is not None
+                has_traj = bool(existing.get("traj_dir"))
+                if require_traj and not has_wm and not has_traj:
+                    continue
                 if has_eval or has_wm:
                     result = AblationResult(
                         params=full_params,
@@ -357,6 +460,7 @@ def load_cached_results(
                         envs_per_s=existing.get("envs_per_s"),
                         wm_size=existing.get("wm_size"),
                         wm_name=existing.get("wm_name"),
+                        traj_dir=existing.get("traj_dir", ""),
                     )
                     cached_results.append(result)
                     print(f"[ABLATION] Cache hit: {params} -> success={result.success}")
@@ -378,11 +482,17 @@ def run_ablation_study(
     video_num_envs: int = 1,
     video_length: int = 300,
     task: str = "Isaac-H12-Bullet-Time-Hybrid-v0",
+    collect_output_dir: str | None = "collected_trajectories",
+    num_trajectories: int = 100,
+    collect_num_envs: int = 64,
+    collect_repeats: int = 1,
+    random_seed: bool = False,
     **kwargs,
 ) -> list[AblationResult]:
     """Run ablation study over parameter grid. Returns list of results."""
     _seed_val = param_grid.get("ABLATION_SEED", 42)
     seed = _seed_val[0] if isinstance(_seed_val, list) else _seed_val
+    collect_repeats = max(1, int(collect_repeats))
 
     keys = list(param_grid.keys())
     values = list(param_grid.values())
@@ -394,16 +504,36 @@ def run_ablation_study(
     output_path.mkdir(parents=True, exist_ok=True)
     
     print(f"\n{'#'*60}")
-    print(f"# ABLATION STUDY: {len(combinations)} configurations")
+    print(f"# ABLATION STUDY: {len(combinations)} configurations x {collect_repeats} repeats")
     print(f"# Parameters: {keys}")
-    print(f"# Base seed: {seed}")
+    print(f"# Train seed: {'random per repeat' if random_seed else seed}")
+    if collect_output_dir:
+        print(
+            f"# Collect: {num_trajectories} trajs after each retrain -> {collect_output_dir}"
+        )
     print(f"{'#'*60}\n")
+
+    expanded = []
+    for params in combinations:
+        for rep in range(collect_repeats):
+            expanded.append({**params, "ABLATION_REPEAT": rep})
     
-    combinations, cached_results = load_cached_results(output_folder, combinations, DEFAULTS)
+    combinations, cached_results = load_cached_results(
+        output_folder, expanded, DEFAULTS, require_traj=False
+    )
+    if collect_output_dir:
+        still_run = []
+        for params in combinations:
+            dest = _repeat_dest(collect_output_dir, params, collect_repeats, int(params["ABLATION_REPEAT"]))
+            if _has_h5(dest):
+                print(f"[ABLATION] Skip existing repeat -> {dest}")
+                continue
+            still_run.append(params)
+        combinations = still_run
     results = list(cached_results)
     
     total_to_run = len(combinations)
-    print(f"[ABLATION] Running {total_to_run} new configurations ({len(cached_results)} cached)\n")
+    print(f"[ABLATION] Running {total_to_run} train+collect jobs ({len(cached_results)} cached)\n")
     
     def _notify_seed_done(s):
         seed_results = [r for r in results if r.params.get("ABLATION_SEED") == s]
@@ -424,10 +554,35 @@ def run_ablation_study(
         prev_seed = config_seed
 
         print(f"\n[{i+1}/{total_to_run}] Running configuration...")
-        result = train_and_test(full_params, max_train_iters=training_iters, task=task, seed=config_seed, **kwargs)
+        rep = int(full_params.get("ABLATION_REPEAT", 0))
+        if random_seed:
+            run_seed = random.randint(0, 2**31 - 1)
+        elif config_seed is None:
+            run_seed = None
+        else:
+            run_seed = int(config_seed) + rep
+        print(f"[ABLATION] Repeat {rep + 1}/{collect_repeats} seed={run_seed}")
+        result = train_and_test(full_params, max_train_iters=training_iters, task=task, seed=run_seed, **kwargs)
+
+        use_wm = _as_bool(full_params.get("USE_WORLD_MODEL", False))
+        if collect_output_dir and result.train_log_dir and not use_wm:
+            dest = _repeat_dest(collect_output_dir, params, collect_repeats, rep)
+            result.traj_dir = collect_trajectories(
+                task,
+                full_params,
+                dest,
+                num_trajectories=num_trajectories,
+                num_envs=collect_num_envs,
+                load_run=_latest_run_name(result.train_log_dir),
+                seed=run_seed,
+                random_seed=False,
+                headless=kwargs.get("headless", True),
+                verbose=kwargs.get("verbose", True),
+            )
+
         results.append(result)
 
-        if save_video and not _as_bool(full_params.get("USE_WORLD_MODEL", False)):
+        if save_video and not use_wm:
             sensor_tag = full_params.get("ABLATION_SENSORS", "").replace(":", "-").replace(";", "_")
             record_video(
                 task, f"ablation_{i}_{sensor_tag}",
@@ -459,6 +614,8 @@ def run_ablation_study(
                 f"avg_inference_ms={r.avg_inference_ms}, "
                 f"hz={r.avg_inference_hz}, envs_per_s={r.envs_per_s}"
             )
+        if r.traj_dir:
+            extra += f", trajs={r.traj_dir}"
         print(f"  {r.params} -> success={r.success}{extra}")
     print(f"\nResults saved to: {output_file}")
     
@@ -484,15 +641,15 @@ DEFAULTS = {
     "ABLATION_PROJECTILE_MIN_HEIGHT": 1.0,
     "ABLATION_PROJECTILE_MAX_HEIGHT": 3.0,
     "ABLATION_SEED": 42,
-    "ABLATION_NUM_ENVS": 1024,
-    "USE_WORLD_MODEL": True,  # False: train.py + eval.py; True: train_wm.py
-    "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S/tof_wm_2000_long.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
+    "ABLATION_NUM_ENVS": 4096,
+    "USE_WORLD_MODEL": False,  # False: train.py + eval.py; True: train_wm.py
+    "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/tof_wm_2000.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
     "WM_CONFIG": None,  # YAML for checkpoints that lack an embedded config
     "WM_OUTPUT_CHECKPOINT": None,  # adapted-weight save path; default <checkpoint_stem>_robot.pt
     "WM_MODE": "frozen",  # frozen = infer only; alternating = collect trajectories and retrain
-    "WM_CONTACT_THRESHOLD": 0.2,
-    "INFERENCE_FRAMES": 5, # Only run inference every N frames
-    "CONTEXT_STRIDE": 3, # For 20 hz trained model 
+    "WM_CONTACT_THRESHOLD": 0.5,
+    "INFERENCE_FRAMES": 1,
+    "CONTEXT_STRIDE": 1,
     "WM_BATCH_SIZE": 256,  # WM inference micro-batch size
     "WM_REDUCTION": "mean",  # mean-pool latent tokens (flatten keeps all tokens)
     "WM_ODE_STEPS": None,  # flow integration steps; None uses checkpoint; fewer steps = lower latency
@@ -517,35 +674,37 @@ if __name__ == "__main__":
     #   Combine with semicolons: "FIELD:DIST:4.0;RAY:MINDIST:4.0"
     #
     PARAM_GRID = {
+        # Training seed. Repeats retrain with random_seed / seed+repeat, not this list.
+        "ABLATION_SEED": [500],
         # "ABLATION_SEED": [43, 44, 45, 46, 47, 48, 49, 50, 51, 52],
-        "ABLATION_SEED": [42],
-        # "ABLATION_SENSORS": [
-        #     # ── Single sensor shapes ──────────────────────────────────
-        #     # Field sensor (spherical detection)
-        #     # "FIELD:DIST:X",
-        #     # "FIELD:BIN:X",
-        #     # "FIELD:EVENT:X",
-        #     # "FIELD:TRUE_POS:X",
-        #     # Ray sensor (8x8 grid)
-        #     "RAY:DIST:X",
-        #     # "RAY:MINDIST:X",
-        #     # "RAY:BIN:X",
-        #     # "RAY:MINBIN:X",
-        #     # "RAY:EVENT:X",
-        #     # "RAY:TRUE_POS:X",
-        #     # Cone sensor (conical receptive field, 30° default)
-        #     # "CONE:DIST:X",
-        #     # "CONE:BIN:X",
-        #     # "CONE:EVENT:X",
-        #     # "CONE:TRUE_POS:X",
-        #     # ── Sensor combinations ───────────────────────────────────
-        #     # "FIELD:DIST:X;RAY:DIST:X",
+        # "ABLATION_SEED": [53],
+        "ABLATION_SENSORS": [
+            # ── Single sensor shapes ──────────────────────────────────
+            # Field sensor (spherical detection)
+            # "FIELD:DIST:X",
+            # "FIELD:BIN:X",
+            # "FIELD:EVENT:X",
+            # "FIELD:TRUE_POS:X",
+            # Ray sensor (8x8 grid)
+            "RAY:DIST:X",
+            "RAY:MINDIST:X",
+            # "RAY:BIN:X",
+            # "RAY:MINBIN:X",
+            # "RAY:EVENT:X",
+            # "RAY:TRUE_POS:X",
+            # Cone sensor (conical receptive field, 30° default)
+            # "CONE:DIST:X",
+            # "CONE:BIN:X",
+            # "CONE:EVENT:X",
+            # "CONE:TRUE_POS:X",
+            # ── Sensor combinations ───────────────────────────────────
+            # "FIELD:DIST:X;RAY:DIST:X",
 
-        #     #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
-        #     # "FIELD:DIST:X;FIELD:BIN:X",
-        #     # "RAY:DIST:X;RAY:BIN:X",
-        #     # "CONE:DIST:X;CONE:BIN:X",
-        # ],
+            #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
+            # "FIELD:DIST:X;FIELD:BIN:X",
+            # "RAY:DIST:X;RAY:BIN:X",
+            # "CONE:DIST:X;CONE:BIN:X",
+        ],
         # --- Multimodel testing ---
         # "ABLATION_SENSORS": [
         #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
@@ -554,7 +713,7 @@ if __name__ == "__main__":
         #   "CONE:DIST:X;CONE:BIN:X",
         # ],
 
-        # "ABLATION_MAX_RANGE": [2.0, 1.0, 0.5, 0.2],
+        "ABLATION_MAX_RANGE": [2.0],
 
         # Test case
         # "ABLATION_SENSORS": ["FIELD:EVENT:X;FIELD:MINDIST:X"],
@@ -591,10 +750,15 @@ if __name__ == "__main__":
     run_ablation_study(
         param_grid=PARAM_GRID,
         num_envs=4096,
-        training_iters=20000,
+        training_iters=100,
         headless=True,
         task="Template-H12-Survive-Time-HYBRID",
         verbose=False,
-        save_video=True,
+        save_video=False,
         video_length=1000,
+        collect_output_dir="collected_trajectories",
+        num_trajectories=500,
+        collect_num_envs=128,
+        collect_repeats=1,
+        random_seed=True,
     )

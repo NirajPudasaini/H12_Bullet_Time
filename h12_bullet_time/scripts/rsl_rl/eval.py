@@ -34,13 +34,14 @@ import os
 import json
 import torch
 import numpy as np
+from importlib.metadata import version as pkg_version
 
 from rsl_rl.runners import OnPolicyRunner
 
 from isaaclab.envs import DirectMARLEnv, DirectRLEnvCfg, ManagerBasedRLEnvCfg, multi_agent_to_single_agent
 from isaaclab.utils.assets import retrieve_file_path
 
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg, handle_deprecated_rsl_rl_checkpoint
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
@@ -151,6 +152,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     """Evaluate agent and save statistics to JSON."""
     
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    _rsl_rl_version = pkg_version("rsl-rl-lib")
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, _rsl_rl_version)
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device else env_cfg.sim.device
@@ -162,6 +165,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     )
     if args_cli.checkpoint:
         resume_path = retrieve_file_path(args_cli.checkpoint)
+    resume_path = handle_deprecated_rsl_rl_checkpoint(resume_path, _rsl_rl_version)
     
     env_cfg.log_dir = os.path.dirname(resume_path)
 

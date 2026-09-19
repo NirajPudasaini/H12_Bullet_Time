@@ -79,3 +79,8 @@ logs
 
 # Secrets
 **/.env
+
+**/collected_trajectories/
+**/collected_datasets/
+**/collected_data/
+**/collected_trajectories (deterministic)/
