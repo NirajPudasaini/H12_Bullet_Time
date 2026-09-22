@@ -43,6 +43,7 @@ parser.add_argument("--wm_reduction", choices=("mean", "flatten"), default="mean
 parser.add_argument("--wm_ode_steps", type=int, default=None)
 parser.add_argument("--wm_stochastic", action="store_true", help="Sample fresh flow noise at each inference.")
 parser.add_argument("--wm_no_amp", action="store_true")
+parser.add_argument("--wm_precision", type=str.lower, choices=("fp32", "fp16", "bf16"), default="fp16")
 parser.add_argument("--wm_trajectories_per_cycle", type=int, default=4096, help="X trajectories.")
 parser.add_argument("--wm_epochs_per_cycle", type=int, default=1, help="Y epochs.")
 parser.add_argument("--wm_total_trajectories", type=int, default=40960, help="Z trajectories.")
@@ -51,6 +52,23 @@ parser.add_argument("--wm_replay_cycles", type=int, default=1)
 parser.add_argument("--wm_train_encoder", action="store_true")
 parser.add_argument("--wm_no_train_dynamics", action="store_true")
 parser.add_argument("--wm_diag_interval", type=int, default=50, help="Print WM inference speed every N steps.")
+parser.add_argument(
+    "--wm_current_obs_type", type=str.lower, choices=("raw", "latent", "none"), default="latent",
+    help="Current ToF observation: raw pixels, encoder latent, or none.",
+)
+parser.add_argument(
+    "--wm_future_obs_type",
+    type=lambda s: str(s).lower().replace("_", "-"),
+    choices=("latent", "decoded", "min-decoded", "closest-point", "none"),
+    default="latent",
+    help="Selected future observation: latent, decoded ToF, min-decoded, closest-point, or none.",
+)
+parser.add_argument(
+    "--wm_contact_pred",
+    type=lambda v: str(v).lower() in ("1", "true", "yes"),
+    default=True,
+    help="Append the WM contact-prediction flag to policy observations.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -153,6 +171,11 @@ def _tof_frame(env):
     return torch.nan_to_num(torch.stack(frames, dim=-1), nan=1.0).unsqueeze(1), list(names)
 
 
+def _joint_state(env):
+    robot = env.unwrapped.scene["robot"]
+    return robot.data.joint_pos, list(robot.joint_names)
+
+
 class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
     def __init__(self, env, clip_actions, world_model, mode, data_dir, trajectories_per_cycle,
                  total_trajectories, epochs_per_cycle, replay_cycles, train_encoder, train_dynamics,
@@ -180,7 +203,11 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
                 f"{self.world_model.action_dim}"
             )
         self.frame, self.sensor_names = _tof_frame(self)
-        self.features = self._timed_infer(lambda: self.world_model.initialize(self.frame))
+        joint_pos, joint_names = _joint_state(self)
+        self.features = self._timed_infer(
+            lambda: self.world_model.initialize(
+                self.frame, joint_pos=joint_pos, joint_names=joint_names,
+                sensor_names=self.sensor_names))
         if mode == "alternating":
             step_dt = getattr(self.unwrapped, "step_dt", None) or (
                 self.unwrapped.cfg.sim.dt * self.unwrapped.cfg.decimation
@@ -195,7 +222,9 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
             )
 
     def _augment(self, observations):
-        observations["policy"] = torch.cat((observations["policy"], self.features), dim=-1)
+        for key in ("policy", "critic"):
+            if key in observations:
+                observations[key] = torch.cat((observations[key], self.features), dim=-1)
         return observations
 
     def get_observations(self):
@@ -224,8 +253,10 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
             raise RuntimeError("ToF sensor ordering changed during training")
         self._step_count += 1
         refresh = self._step_count % self.inference_frames == 0
+        joint_pos, joint_names = _joint_state(self)
         infer = lambda: self.world_model.advance(
-            self.frame, applied_actions, dones.bool(), refresh=refresh)
+            self.frame, applied_actions, dones.bool(), refresh=refresh,
+            joint_pos=joint_pos, joint_names=joint_names, sensor_names=self.sensor_names)
         self.features = self._timed_infer(infer) if refresh else infer()
         return self._augment(observations), rewards, dones, extras
 
@@ -320,6 +351,7 @@ def main(env_cfg, agent_cfg):
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
+    print(f"[INFO] Run log directory: {log_dir}")
 
     # set the IO descriptors export flag if requested
     if isinstance(env_cfg, ManagerBasedRLEnvCfg):
@@ -368,8 +400,12 @@ def main(env_cfg, agent_cfg):
         seed=agent_cfg.seed,
         ode_steps=args_cli.wm_ode_steps,
         amp=not args_cli.wm_no_amp,
+        precision="fp32" if args_cli.wm_no_amp else args_cli.wm_precision,
         contact_threshold=args_cli.wm_contact_threshold,
         context_stride=args_cli.context_stride,
+        current_obs_type=args_cli.wm_current_obs_type,
+        future_obs_type=args_cli.wm_future_obs_type,
+        include_contact=args_cli.wm_contact_pred,
     )
     env = WorldModelVecEnvWrapper(
         env,
@@ -388,7 +424,11 @@ def main(env_cfg, agent_cfg):
     )
     wm_name = os.path.splitext(os.path.basename(args_cli.wm_checkpoint))[0]
     wm_size = sum(p.numel() for p in world_model.model.parameters())
-    print(f"[INFO] Added {world_model.feature_dim} world-model features to policy observations")
+    print(
+        f"[INFO] Added {world_model.feature_dim} world-model features "
+        f"(current={args_cli.wm_current_obs_type}, future={args_cli.wm_future_obs_type}, "
+        f"contact={args_cli.wm_contact_pred})"
+    )
     print(f"[INFO] World model {wm_name}: {wm_size} parameters")
 
     # create runner from rsl-rl

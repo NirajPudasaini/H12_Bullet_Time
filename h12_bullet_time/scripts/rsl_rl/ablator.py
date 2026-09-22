@@ -5,9 +5,10 @@ import subprocess
 import sys
 import json
 import smtplib
+import time
 from email.mime.text import MIMEText
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import product
 from dataclasses import dataclass, field, asdict
 from typing import Any
@@ -69,6 +70,39 @@ def _as_bool(v) -> bool:
     return str(v).lower() in ("1", "true", "yes")
 
 
+def _fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
+
+
+def _eta_text(done: int, total: int, elapsed: float) -> str:
+    if done <= 0:
+        return "ETA unknown until the first config finishes"
+    avg = elapsed / done
+    left = total - done
+    if left <= 0:
+        return f"all {total} configs done in {_fmt_duration(elapsed)}"
+    remaining = avg * left
+    finish = datetime.now() + timedelta(seconds=remaining)
+    return (
+        f"ETA {finish.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"({_fmt_duration(remaining)} left, avg {_fmt_duration(avg)}/config)"
+    )
+
+
+def _wm_run_suffix(params: dict) -> str:
+    cur = str(params.get("CURRENT_OBS_TYPE", "LATENT")).upper().replace("_", "-")
+    fut = str(params.get("FUTURE_OBS_TYPE", "LATENT")).upper().replace("_", "-")
+    contact = "CONTACT" if _as_bool(params.get("CONTACT_PRED", True)) else "NOCONTACT"
+    return f"CUR-{cur}-FUT-{fut}-{contact}"
+
+
 def _parse_wm_stats(output: str) -> dict:
     for line in reversed(output.splitlines()):
         if "[WM_STATS]" in line:
@@ -91,12 +125,16 @@ _WM_VALUE_FLAGS = {
     "WM_BATCH_SIZE": "--wm_batch_size",
     "WM_REDUCTION": "--wm_reduction",
     "WM_ODE_STEPS": "--wm_ode_steps",
+    "WM_PRECISION": "--wm_precision",
     "WM_TRAJECTORIES_PER_CYCLE": "--wm_trajectories_per_cycle",
     "WM_EPOCHS_PER_CYCLE": "--wm_epochs_per_cycle",
     "WM_TOTAL_TRAJECTORIES": "--wm_total_trajectories",
     "WM_DATA_DIR": "--wm_data_dir",
     "WM_REPLAY_CYCLES": "--wm_replay_cycles",
     "WM_DIAG_INTERVAL": "--wm_diag_interval",
+    "CURRENT_OBS_TYPE": "--wm_current_obs_type",
+    "FUTURE_OBS_TYPE": "--wm_future_obs_type",
+    "CONTACT_PRED": "--wm_contact_pred",
 }
 _WM_BOOL_FLAGS = {
     "WM_STOCHASTIC": "--wm_stochastic",
@@ -119,6 +157,28 @@ def _append_wm_args(cmd: list[str], params: dict) -> None:
             cmd.append(flag)
 
 
+def _parse_train_log_dir(output: str) -> str:
+    log_dir = ""
+    for line in output.split("\n"):
+        if "Run log directory:" in line:
+            return line.split(":", 1)[-1].strip()
+        if "Logging experiment in directory:" in line:
+            log_dir = line.split(":", 1)[-1].strip()
+    return log_dir
+
+
+def _wm_play_fields(params: dict) -> dict:
+    inf, stride, thresh = params.get("INFERENCE_FRAMES"), params.get("CONTEXT_STRIDE"), params.get("WM_CONTACT_THRESHOLD")
+    return {
+        "inference_frames": None if inf in (None, "") else int(inf),
+        "context_stride": None if stride in (None, "") else int(stride),
+        "wm_contact_threshold": None if thresh in (None, "") else float(thresh),
+        "current_obs_type": None if params.get("CURRENT_OBS_TYPE") in (None, "") else str(params["CURRENT_OBS_TYPE"]),
+        "future_obs_type": None if params.get("FUTURE_OBS_TYPE") in (None, "") else str(params["FUTURE_OBS_TYPE"]),
+        "contact_pred": _as_bool(params.get("CONTACT_PRED", True)),
+    }
+
+
 @dataclass
 class AblationResult:
     params: dict
@@ -130,6 +190,12 @@ class AblationResult:
     envs_per_s: float | None = None
     wm_size: int | None = None
     wm_name: str | None = None
+    inference_frames: int | None = None
+    context_stride: int | None = None
+    wm_contact_threshold: float | None = None
+    current_obs_type: str | None = None
+    future_obs_type: str | None = None
+    contact_pred: bool | None = None
 
 
 def train_and_test(
@@ -159,7 +225,8 @@ def train_and_test(
     
     sensor_tag = str(params.get("ABLATION_SENSORS", "")).replace(":", "-").replace(";", "_")
     if use_wm:
-        sensor_tag = f"{sensor_tag}-WM" if sensor_tag else "WM"
+        suffix = f"WM-{_wm_run_suffix(params)}"
+        sensor_tag = f"{sensor_tag}-{suffix}" if sensor_tag else suffix
     train_script = "train_wm.py" if use_wm else "train.py"
     if use_wm and task == "Template-H12-Survive-Time-HYBRID":
         task = "Template-H12-Survive-Time-WM"
@@ -179,13 +246,8 @@ def train_and_test(
     
     print(f"\n{'='*60}\n[ABLATION] Training with params: {params}\n{'='*60}")
     train_returncode, train_output = run_cmd(train_cmd, env, verbose=verbose)
-    
-    log_dir = ""
-    for line in train_output.split("\n"):
-        if "Logging experiment in directory:" in line:
-            log_dir = line.split(":")[-1].strip()
-            break
-    
+
+    log_dir = _parse_train_log_dir(train_output)
     wm_stats = _parse_wm_stats(train_output) if use_wm else {}
     result = AblationResult(
         params=params,
@@ -195,6 +257,7 @@ def train_and_test(
         envs_per_s=wm_stats.get("envs_per_s"),
         wm_size=wm_stats.get("wm_size"),
         wm_name=wm_stats.get("wm_name"),
+        **(_wm_play_fields(params) if use_wm else {}),
     )
 
     if train_returncode != 0:
@@ -204,6 +267,8 @@ def train_and_test(
     if use_wm:
         print(
             f"[ABLATION] WM stats: name={result.wm_name}, size={result.wm_size}, "
+            f"inference_frames={result.inference_frames}, context_stride={result.context_stride}, "
+            f"contact_threshold={result.wm_contact_threshold}, "
             f"avg_inference_ms={result.avg_inference_ms}, "
             f"avg_inference_hz={result.avg_inference_hz}, envs_per_s={result.envs_per_s}"
         )
@@ -347,6 +412,7 @@ def load_cached_results(
                 has_eval = bool(existing.get("test_metrics"))
                 has_wm = existing.get("wm_name") is not None
                 if has_eval or has_wm:
+                    play = _wm_play_fields(full_params)
                     result = AblationResult(
                         params=full_params,
                         train_log_dir=existing.get("train_log_dir", ""),
@@ -357,6 +423,12 @@ def load_cached_results(
                         envs_per_s=existing.get("envs_per_s"),
                         wm_size=existing.get("wm_size"),
                         wm_name=existing.get("wm_name"),
+                        inference_frames=existing.get("inference_frames", play["inference_frames"]),
+                        context_stride=existing.get("context_stride", play["context_stride"]),
+                        wm_contact_threshold=existing.get("wm_contact_threshold", play["wm_contact_threshold"]),
+                        current_obs_type=existing.get("current_obs_type", play["current_obs_type"]),
+                        future_obs_type=existing.get("future_obs_type", play["future_obs_type"]),
+                        contact_pred=existing.get("contact_pred", play["contact_pred"]),
                     )
                     cached_results.append(result)
                     print(f"[ABLATION] Cache hit: {params} -> success={result.success}")
@@ -415,6 +487,7 @@ def run_ablation_study(
         )
 
     prev_seed = None
+    study_t0 = time.perf_counter()
     for i, params in enumerate(combinations):
         full_params = {**DEFAULTS, **params}
         config_seed = full_params.get("ABLATION_SEED", seed)
@@ -423,7 +496,9 @@ def run_ablation_study(
             _notify_seed_done(prev_seed)
         prev_seed = config_seed
 
-        print(f"\n[{i+1}/{total_to_run}] Running configuration...")
+        elapsed = time.perf_counter() - study_t0
+        print(f"\n[{i+1}/{total_to_run}] Running configuration... {_eta_text(i, total_to_run, elapsed)}")
+        cfg_t0 = time.perf_counter()
         result = train_and_test(full_params, max_train_iters=training_iters, task=task, seed=config_seed, **kwargs)
         results.append(result)
 
@@ -439,6 +514,10 @@ def run_ablation_study(
         
         with open(output_file, "w") as f:
             json.dump([asdict(r) for r in results], f, indent=2)
+        print(
+            f"[ABLATION] Config {i+1}/{total_to_run} took {_fmt_duration(time.perf_counter() - cfg_t0)}; "
+            f"{_eta_text(i + 1, total_to_run, time.perf_counter() - study_t0)}"
+        )
 
     if prev_seed is not None:
         _notify_seed_done(prev_seed)
@@ -468,7 +547,7 @@ def run_ablation_study(
 DEFAULTS = {
     "ABLATION_PROJECTILE_RADIUS": 0.15,
     "ABLATION_SENSORS": "RAY:DIST:X",
-    "ABLATION_MAX_RANGE": 4.0,
+    "ABLATION_MAX_RANGE": 2.0,
     "ABLATION_DEBUG_VIS": False,
     "ABLATION_PROXIMITY_SCALE": -0.01,
     "ABLATION_CONTACT_SCALE": -0.5,
@@ -484,18 +563,18 @@ DEFAULTS = {
     "ABLATION_PROJECTILE_MIN_HEIGHT": 1.0,
     "ABLATION_PROJECTILE_MAX_HEIGHT": 3.0,
     "ABLATION_SEED": 42,
-    "ABLATION_NUM_ENVS": 1024,
+    "ABLATION_NUM_ENVS": 4096,
     "USE_WORLD_MODEL": True,  # False: train.py + eval.py; True: train_wm.py
     "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S/tof_wm_2000_long.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
     "WM_CONFIG": None,  # YAML for checkpoints that lack an embedded config
     "WM_OUTPUT_CHECKPOINT": None,  # adapted-weight save path; default <checkpoint_stem>_robot.pt
     "WM_MODE": "frozen",  # frozen = infer only; alternating = collect trajectories and retrain
-    "WM_CONTACT_THRESHOLD": 0.2,
-    "INFERENCE_FRAMES": 5, # Only run inference every N frames
-    "CONTEXT_STRIDE": 3, # For 20 hz trained model 
-    "WM_BATCH_SIZE": 256,  # WM inference micro-batch size
-    "WM_REDUCTION": "mean",  # mean-pool latent tokens (flatten keeps all tokens)
-    "WM_ODE_STEPS": None,  # flow integration steps; None uses checkpoint; fewer steps = lower latency
+    "WM_CONTACT_THRESHOLD": 0.3,
+    "INFERENCE_FRAMES": 6, # Only run inference every N frames
+    "CONTEXT_STRIDE": 3, # 3 For 20 hz, 6 For 10 hz trained model 
+    "WM_BATCH_SIZE": 1024,  # WM inference micro-batch size
+    "WM_REDUCTION": "flatten",  # mean-pool latent tokens (flatten keeps all tokens)
+    "WM_ODE_STEPS": 1,  # flow integration steps; None uses checkpoint; fewer steps = lower latency
     "WM_TRAJECTORIES_PER_CYCLE": 100,  # X: completed trajectories per alternating retrain cycle
     "WM_EPOCHS_PER_CYCLE": 1,  # Y: WM train epochs per cycle
     "WM_TOTAL_TRAJECTORIES": 1000,  # Z: stop alternating collection after this many trajectories
@@ -503,9 +582,13 @@ DEFAULTS = {
     "WM_REPLAY_CYCLES": 1,  # train on the latest N cycle files (1 = new data only)
     "WM_DIAG_INTERVAL": 50,  # print WM inference latency every N steps; 0 disables
     "WM_STOCHASTIC": False,  # sample fresh flow noise at every prediction
-    "WM_NO_AMP": False,  # disable FP16 autocast
+    "WM_NO_AMP": False,  # disable autocast (forces fp32, overrides WM_PRECISION)
+    "WM_PRECISION": "fp16",  # fp32 | fp16 | bf16 autocast dtype for WM encoder/dynamics/decode
     "WM_TRAIN_ENCODER": False,  # also train the encoder during alternating cycles
     "WM_NO_TRAIN_DYNAMICS": False,  # skip dynamics updates during alternating cycles
+    "CURRENT_OBS_TYPE": "LATENT",  # RAW | LATENT | NONE
+    "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED | MIN-DECODED | CLOSEST-POINT | NONE
+    "CONTACT_PRED": True,  # append WM contact-prediction flag to policy observations
 }
 
 if __name__ == "__main__":
@@ -518,34 +601,35 @@ if __name__ == "__main__":
     #
     PARAM_GRID = {
         # "ABLATION_SEED": [43, 44, 45, 46, 47, 48, 49, 50, 51, 52],
-        "ABLATION_SEED": [42],
-        # "ABLATION_SENSORS": [
-        #     # ── Single sensor shapes ──────────────────────────────────
-        #     # Field sensor (spherical detection)
-        #     # "FIELD:DIST:X",
-        #     # "FIELD:BIN:X",
-        #     # "FIELD:EVENT:X",
-        #     # "FIELD:TRUE_POS:X",
-        #     # Ray sensor (8x8 grid)
-        #     "RAY:DIST:X",
-        #     # "RAY:MINDIST:X",
-        #     # "RAY:BIN:X",
-        #     # "RAY:MINBIN:X",
-        #     # "RAY:EVENT:X",
-        #     # "RAY:TRUE_POS:X",
-        #     # Cone sensor (conical receptive field, 30° default)
-        #     # "CONE:DIST:X",
-        #     # "CONE:BIN:X",
-        #     # "CONE:EVENT:X",
-        #     # "CONE:TRUE_POS:X",
-        #     # ── Sensor combinations ───────────────────────────────────
-        #     # "FIELD:DIST:X;RAY:DIST:X",
+        # "ABLATION_SEED": [44, 45, 46, 47],
+        "ABLATION_SEED": [43],
+        "ABLATION_SENSORS": [
+            # ── Single sensor shapes ──────────────────────────────────
+            # Field sensor (spherical detection)
+            # "FIELD:DIST:X",
+            # "FIELD:BIN:X",
+            # "FIELD:EVENT:X",
+            # "FIELD:TRUE_POS:X",
+            # Ray sensor (8x8 grid)
+            "RAY:DIST:X",
+            # "RAY:MINDIST:X",
+            # "RAY:BIN:X",
+            # "RAY:MINBIN:X",
+            # "RAY:EVENT:X",
+            # "RAY:TRUE_POS:X",
+            # Cone sensor (conical receptive field, 30° default)
+            # "CONE:DIST:X",
+            # "CONE:BIN:X",
+            # "CONE:EVENT:X",
+            # "CONE:TRUE_POS:X",
+            # ── Sensor combinations ───────────────────────────────────
+            # "FIELD:DIST:X;RAY:DIST:X",
 
-        #     #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
-        #     # "FIELD:DIST:X;FIELD:BIN:X",
-        #     # "RAY:DIST:X;RAY:BIN:X",
-        #     # "CONE:DIST:X;CONE:BIN:X",
-        # ],
+            #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
+            # "FIELD:DIST:X;FIELD:BIN:X",
+            # "RAY:DIST:X;RAY:BIN:X",
+            # "CONE:DIST:X;CONE:BIN:X",
+        ],
         # --- Multimodel testing ---
         # "ABLATION_SENSORS": [
         #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
@@ -563,9 +647,15 @@ if __name__ == "__main__":
         # ── World-model inference-speed study ─────────────────────────
         # "USE_WORLD_MODEL": [True],
         # "ABLATION_NUM_ENVS": [1, 2, 4, 8, 16],
-        # "WM_CHECKPOINT": [
-        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/tof_wm_2000.pt",
-        # ],
+        "WM_CHECKPOINT": [
+            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/tof_wm_2000.pt",
+            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S-e8/tof_wm.pt"
+            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S-e16/tof_wm.pt"
+            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/ToFWM-S-e8/tof_wm.pt"
+            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c5r12/ToFWM-S-e8/tof_wm.pt"
+            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/d5000enc-p6000dyn/ToFWM-S-e32/tof_wm.pt"
+            "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        ],
         # "WM_CONFIG": [None],
         # "WM_OUTPUT_CHECKPOINT": [None],
         # "WM_MODE": ["frozen"],
@@ -585,16 +675,22 @@ if __name__ == "__main__":
         # "WM_NO_AMP": [False],
         # "WM_TRAIN_ENCODER": [False],
         # "WM_NO_TRAIN_DYNAMICS": [False],
+        # "CURRENT_OBS_TYPE": ["RAW", "LATENT", "NONE"],
+        "CURRENT_OBS_TYPE": ["LATENT", "NONE"],
+        # "FUTURE_OBS_TYPE": ["LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "NONE"],
+        "FUTURE_OBS_TYPE": ["LATENT", "MIN-DECODED"],
+        "CONTACT_PRED": [True],
+        # "WM_PRECISION": ["fp16", "bf16"],
         
     }
     
     run_ablation_study(
         param_grid=PARAM_GRID,
         num_envs=4096,
-        training_iters=20000,
+        training_iters=3000,
         headless=True,
         task="Template-H12-Survive-Time-HYBRID",
         verbose=False,
-        save_video=True,
+        save_video=False,
         video_length=1000,
     )

@@ -1,4 +1,3 @@
-from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.utils import configclass
 
 from h12_bullet_time.assets.robots.unitree import H12_CFG_HANDLESS
@@ -6,7 +5,6 @@ from h12_bullet_time.sensors.tof_sensor_cfg import TofSensorCfg
 from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
 
 from . import h12_survive_time_env_cfg_hybrid as base
-from . import mdp as local_mdp
 
 
 @configclass
@@ -46,8 +44,4 @@ class H12SurviveTimeEnvCfg_WM(base.H12SurviveTimeEnvCfg_HYBRID):
         for name in base._sensor_configs:
             setattr(self.scene, name, None)
         self.observations.policy.sensor_observations = None
-        self.observations.critic.sensor_observations = ObsTerm(
-            func=local_mdp.tof_distances_obs,
-            scale=0.25,
-            params={"max_range": base._default_max_range, "handle_nan": "replace_with_max"},
-        )
+        self.observations.critic.sensor_observations = None
