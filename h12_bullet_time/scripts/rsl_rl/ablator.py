@@ -69,6 +69,16 @@ def _as_bool(v) -> bool:
     return str(v).lower() in ("1", "true", "yes")
 
 
+def _apply_device(cmd: list[str], env: dict, device: str | None) -> None:
+    if not device:
+        return
+    if device.startswith("cuda:"):
+        env["CUDA_VISIBLE_DEVICES"] = device.split(":")[-1]
+        cmd.extend(["--device", "cuda:0"])
+    else:
+        cmd.extend(["--device", device])
+
+
 def _parse_wm_stats(output: str) -> dict:
     for line in reversed(output.splitlines()):
         if "[WM_STATS]" in line:
@@ -141,6 +151,7 @@ def train_and_test(
     headless: bool = True,
     verbose: bool = True,
     seed: int | None = None,
+    device: str | None = None,
 ) -> AblationResult:
     """Train and test with given ablation parameters. Returns AblationResult."""
 
@@ -176,6 +187,7 @@ def train_and_test(
         train_cmd.extend(["--seed", str(seed)])
     if use_wm:
         _append_wm_args(train_cmd, params)
+    _apply_device(train_cmd, env, device)
     
     print(f"\n{'='*60}\n[ABLATION] Training with params: {params}\n{'='*60}")
     train_returncode, train_output = run_cmd(train_cmd, env, verbose=verbose)
@@ -226,6 +238,7 @@ def train_and_test(
         eval_cmd.append("--headless")
     if seed is not None:
         eval_cmd.extend(["--seed", str(seed)])
+    _apply_device(eval_cmd, env, device)
     
     print(f"[ABLATION] Evaluating...")
     eval_returncode, _ = run_cmd(eval_cmd, env, verbose=verbose)
@@ -250,6 +263,7 @@ def record_video(
     num_envs: int = 1,
     video_length: int = 300,
     timeout: int = 300,
+    device: str | None = None,
 ) -> bool:
     """Record a video of the task with the given ablation parameters."""
     script_dir = Path(__file__).parent
@@ -268,6 +282,7 @@ def record_video(
         "--num_envs", str(num_envs),
         "--headless",
     ]
+    _apply_device(video_cmd, env, device)
     
     print(f"[ABLATION] Recording video with {num_envs} env(s), {video_length} steps...")
     try:
@@ -378,9 +393,13 @@ def run_ablation_study(
     video_num_envs: int = 1,
     video_length: int = 300,
     task: str = "Isaac-H12-Bullet-Time-Hybrid-v0",
+    device: str | None = None,
     **kwargs,
 ) -> list[AblationResult]:
     """Run ablation study over parameter grid. Returns list of results."""
+    if device and device.startswith("cuda:"):
+        os.environ["CUDA_VISIBLE_DEVICES"] = device.split(":")[-1]
+        print(f"[ABLATION] Pinning to {device}")
     _seed_val = param_grid.get("ABLATION_SEED", 42)
     seed = _seed_val[0] if isinstance(_seed_val, list) else _seed_val
 
@@ -424,7 +443,9 @@ def run_ablation_study(
         prev_seed = config_seed
 
         print(f"\n[{i+1}/{total_to_run}] Running configuration...")
-        result = train_and_test(full_params, max_train_iters=training_iters, task=task, seed=config_seed, **kwargs)
+        result = train_and_test(
+            full_params, max_train_iters=training_iters, task=task, seed=config_seed, device=device, **kwargs
+        )
         results.append(result)
 
         if save_video and not _as_bool(full_params.get("USE_WORLD_MODEL", False)):
@@ -435,6 +456,7 @@ def run_ablation_study(
                 params=full_params,
                 num_envs=video_num_envs,
                 video_length=video_length,
+                device=device,
             )
         
         with open(output_file, "w") as f:
@@ -597,4 +619,5 @@ if __name__ == "__main__":
         verbose=False,
         save_video=True,
         video_length=1000,
+        device="cuda:1",
     )
