@@ -672,7 +672,7 @@ if __name__ == "__main__":
     #   Combine with semicolons: "FIELD:DIST:4.0;RAY:MINDIST:4.0"
     #
     PARAM_GRID = {
-        "ABLATION_SEED": [48, 49, 50, 51, 52],
+        "ABLATION_SEED": [48, 49],
         # "ABLATION_SEED": [44, 45, 46, 47],
         # "ABLATION_SEED": [43],
         "ABLATION_SENSORS": [
@@ -750,9 +750,9 @@ if __name__ == "__main__":
         # RAW uses the sensor vector (MINDIST -> one distance per sensor). The WM still gets the full image.
         # DECODED is the full decoded image. MIN-DECODED mins that image to one distance per sensor.
         # "CURRENT_OBS_TYPE": ["RAW", "LATENT", "NONE"],
-        "CURRENT_OBS_TYPE": ["RAW"],
+        "CURRENT_OBS_TYPE": ["RAW", "LATENT"],
         # "FUTURE_OBS_TYPE": ["LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "NONE"],
-        "FUTURE_OBS_TYPE": ["MIN-DECODED"],
+        "FUTURE_OBS_TYPE": ["MIN-DECODED", "CLOSEST-POINT"],
         "CONTACT_PRED": [True],
         # "WM_PRECISION": ["fp16", "bf16"],
         
