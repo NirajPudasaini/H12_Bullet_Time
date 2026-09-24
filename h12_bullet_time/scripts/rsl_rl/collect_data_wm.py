@@ -37,6 +37,7 @@ parser.add_argument("--wm_stochastic", action="store_true")
 parser.add_argument("--wm_no_amp", action="store_true")
 parser.add_argument("--inference_frames", type=int, default=1)
 parser.add_argument("--context_stride", type=int, default=1)
+parser.add_argument("--wm_raw_signals", default=None)
 parser.add_argument("--wm_current_obs_type", default="latent")
 parser.add_argument("--wm_future_obs_type", default="latent")
 parser.add_argument("--wm_contact_pred", default="true")
@@ -68,7 +69,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import isaaclab_tasks  # noqa: F401
 import h12_bullet_time.tasks  # noqa: F401
 from h12_bullet_time.sensors import TofSensor
-from trybrid_skin import TOFWorldModel
+from trybrid_skin import TOFWorldModel, resolve_raw_signals
 
 
 def _latest_run(log_root):
@@ -262,6 +263,9 @@ def main(env_cfg, agent_cfg):
         current_obs_type=str(args_cli.wm_current_obs_type).lower().replace("_", "-"),
         future_obs_type=str(args_cli.wm_future_obs_type).lower().replace("_", "-"),
         include_contact=str(args_cli.wm_contact_pred).lower() in ("1", "true", "yes"),
+        raw_signals=resolve_raw_signals(
+            args_cli.wm_raw_signals, os.environ.get("ABLATION_SENSORS", "")
+        ),
     )
     env = WMVecEnv(env, agent_cfg.clip_actions, world_model, args_cli.inference_frames)
     if agent_cfg.class_name == "OnPolicyRunner":

@@ -54,14 +54,23 @@ parser.add_argument("--wm_no_train_dynamics", action="store_true")
 parser.add_argument("--wm_diag_interval", type=int, default=50, help="Print WM inference speed every N steps.")
 parser.add_argument(
     "--wm_current_obs_type", type=str.lower, choices=("raw", "latent", "none"), default="latent",
-    help="Current ToF observation: raw pixels, encoder latent, or none.",
+    help="Current observation: raw sensor vector, encoder latent, or none. "
+         "RAW follows ABLATION_SENSORS (DIST image or MINDIST per sensor). "
+         "The world model still encodes the full distance image.",
 )
 parser.add_argument(
     "--wm_future_obs_type",
     type=lambda s: str(s).lower().replace("_", "-"),
     choices=("latent", "decoded", "min-decoded", "closest-point", "none"),
     default="latent",
-    help="Selected future observation: latent, decoded ToF, min-decoded, closest-point, or none.",
+    help="Selected future observation. DECODED is the full decoded distance image. "
+         "MIN-DECODED is that image reduced to one closest distance per sensor.",
+)
+parser.add_argument(
+    "--wm_raw_signals",
+    default=None,
+    help="Comma-separated DIST/MINDIST reductions for RAW. "
+         "Default: ray signals from ABLATION_SENSORS.",
 )
 parser.add_argument(
     "--wm_contact_pred",
@@ -124,7 +133,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import h12_bullet_time.tasks  # noqa: F401
 
 try:
-    from trybrid_skin import TOFTrajectoryCollector, TOFWorldModel
+    from trybrid_skin import TOFTrajectoryCollector, TOFWorldModel, resolve_raw_signals
 except ImportError as exc:
     raise ImportError(
         "Install trybrid_skin_project into the Isaac Lab environment with "
@@ -388,6 +397,11 @@ def main(env_cfg, agent_cfg):
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
+    if args_cli.wm_raw_signals is None:
+        args_cli.wm_raw_signals = ",".join(
+            resolve_raw_signals(spec=os.environ.get("ABLATION_SENSORS", ""))
+        )
+    raw_signals = resolve_raw_signals(args_cli.wm_raw_signals)
     world_model = TOFWorldModel(
         checkpoint=args_cli.wm_checkpoint,
         output_checkpoint=args_cli.wm_output_checkpoint
@@ -406,6 +420,7 @@ def main(env_cfg, agent_cfg):
         current_obs_type=args_cli.wm_current_obs_type,
         future_obs_type=args_cli.wm_future_obs_type,
         include_contact=args_cli.wm_contact_pred,
+        raw_signals=raw_signals,
     )
     env = WorldModelVecEnvWrapper(
         env,

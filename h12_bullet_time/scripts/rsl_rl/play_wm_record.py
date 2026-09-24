@@ -44,6 +44,7 @@ parser.add_argument("--wm_no_amp", action="store_true")
 parser.add_argument("--wm_precision", type=str.lower, choices=("fp32", "fp16", "bf16"), default=None)
 parser.add_argument("--inference_frames", type=int, default=None, help="Defaults to the run log.")
 parser.add_argument("--context_stride", type=int, default=None, help="Defaults to the run log.")
+parser.add_argument("--wm_raw_signals", default=None, help="Defaults to the run log.")
 parser.add_argument("--wm_current_obs_type", default=None, help="Defaults to the run log.")
 parser.add_argument("--wm_future_obs_type", default=None, help="Defaults to the run log.")
 parser.add_argument("--wm_contact_pred", default=None, help="Defaults to the run log.")
@@ -81,7 +82,7 @@ import h12_bullet_time.tasks  # noqa: F401
 from h12_bullet_time.sensors import TofSensor
 
 try:
-    from trybrid_skin import TOFWorldModel
+    from trybrid_skin import TOFWorldModel, resolve_raw_signals
 except ImportError as exc:
     raise ImportError(
         "Install trybrid_skin_project with `python -m pip install -e /path/to/trybrid_skin_project`."
@@ -403,6 +404,7 @@ def _apply_saved_wm_args(policy_dir):
         "wm_reduction": saved.get("wm_reduction"),
         "wm_ode_steps": saved.get("wm_ode_steps"),
         "wm_precision": saved.get("wm_precision"),
+        "wm_raw_signals": saved.get("wm_raw_signals"),
         "wm_current_obs_type": saved.get("wm_current_obs_type"),
         "wm_future_obs_type": saved.get("wm_future_obs_type"),
         "wm_contact_pred": saved.get("wm_contact_pred"),
@@ -498,6 +500,7 @@ def main(env_cfg, agent_cfg):
         current_obs_type=args_cli.wm_current_obs_type,
         future_obs_type=args_cli.wm_future_obs_type,
         include_contact=args_cli.wm_contact_pred,
+        raw_signals=resolve_raw_signals(args_cli.wm_raw_signals),
     )
     env = WMRecordVecEnv(env, agent_cfg.clip_actions, world_model, args_cli.inference_frames)
     print(f"[WM_VERIFY] base_obs_dim={env.base_obs_dim} wm_feature_dim={world_model.feature_dim} "

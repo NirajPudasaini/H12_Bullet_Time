@@ -307,6 +307,67 @@ def train_and_test(
     print(f"[ABLATION] Results: success={result.success}, metrics={metrics}")
     return result
 
+def _wm_task(task: str) -> str:
+    if task == "Template-H12-Survive-Time-HYBRID":
+        return "Template-H12-Survive-Time-WM"
+    return task
+
+
+def record_wm_video(
+    task: str,
+    run_id: str,
+    video_folder: str,
+    log_dir: str,
+    params: dict | None = None,
+    num_envs: int = 1,
+    video_length: int = 300,
+    seed: int | None = None,
+    timeout: int = 3600,
+) -> bool:
+    """Record a world-model policy video with play_wm_record.py."""
+    script_dir = Path(__file__).parent
+    env = os.environ.copy()
+    if params:
+        for k, v in params.items():
+            env[k] = str(v)
+    video_cmd = [
+        "python", str(script_dir / "play_wm_record.py"),
+        "--task", _wm_task(task),
+        "--checkpoint", log_dir,
+        "--num_envs", str(num_envs),
+        "--video_length", str(video_length),
+        "--video_folder", str(video_folder),
+        "--video_name_prefix", run_id,
+    ]
+    wm_checkpoint = (params or {}).get("WM_CHECKPOINT")
+    if wm_checkpoint:
+        video_cmd.extend(["--wm_checkpoint", str(wm_checkpoint)])
+    if seed is not None:
+        video_cmd.extend(["--seed", str(seed)])
+    print(f"[ABLATION] Recording WM video with {num_envs} env(s), {video_length} steps...")
+    try:
+        proc = subprocess.Popen(
+            video_cmd, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+        stdout, _ = proc.communicate(timeout=timeout)
+        print(stdout)
+        if proc.returncode != 0:
+            print(f"[ABLATION] WM video recording failed with code {proc.returncode}")
+            return False
+        print(f"[ABLATION] WM video saved to {video_folder}")
+        return True
+    except subprocess.TimeoutExpired:
+        print(f"[ABLATION] WM video recording timed out after {timeout}s, killing process...")
+        proc.kill()
+        proc.wait()
+        return False
+    except Exception as e:
+        print(f"[ABLATION] WM video recording error: {e}")
+        return False
+
+
 def record_video(
     task: str,
     run_id: str,
@@ -502,15 +563,26 @@ def run_ablation_study(
         result = train_and_test(full_params, max_train_iters=training_iters, task=task, seed=config_seed, **kwargs)
         results.append(result)
 
-        if save_video and not _as_bool(full_params.get("USE_WORLD_MODEL", False)):
-            sensor_tag = full_params.get("ABLATION_SENSORS", "").replace(":", "-").replace(";", "_")
-            record_video(
-                task, f"ablation_{i}_{sensor_tag}",
-                video_path,
-                params=full_params,
-                num_envs=video_num_envs,
-                video_length=video_length,
-            )
+        if save_video:
+            sensor_tag = str(full_params.get("ABLATION_SENSORS", "")).replace(":", "-").replace(";", "_")
+            if _as_bool(full_params.get("USE_WORLD_MODEL", False)) and result.wm_name and result.train_log_dir:
+                record_wm_video(
+                    task, f"ablation_{i}_{sensor_tag}",
+                    str(video_path),
+                    result.train_log_dir,
+                    params=full_params,
+                    num_envs=video_num_envs,
+                    video_length=video_length,
+                    seed=config_seed,
+                )
+            elif not _as_bool(full_params.get("USE_WORLD_MODEL", False)):
+                record_video(
+                    task, f"ablation_{i}_{sensor_tag}",
+                    str(video_path),
+                    params=full_params,
+                    num_envs=video_num_envs,
+                    video_length=video_length,
+                )
         
         with open(output_file, "w") as f:
             json.dump([asdict(r) for r in results], f, indent=2)
@@ -569,12 +641,12 @@ DEFAULTS = {
     "WM_CONFIG": None,  # YAML for checkpoints that lack an embedded config
     "WM_OUTPUT_CHECKPOINT": None,  # adapted-weight save path; default <checkpoint_stem>_robot.pt
     "WM_MODE": "frozen",  # frozen = infer only; alternating = collect trajectories and retrain
-    "WM_CONTACT_THRESHOLD": 0.3,
-    "INFERENCE_FRAMES": 6, # Only run inference every N frames
+    "WM_CONTACT_THRESHOLD": 0.7,
+    "INFERENCE_FRAMES": 3, # Only run inference every N frames
     "CONTEXT_STRIDE": 3, # 3 For 20 hz, 6 For 10 hz trained model 
     "WM_BATCH_SIZE": 1024,  # WM inference micro-batch size
     "WM_REDUCTION": "flatten",  # mean-pool latent tokens (flatten keeps all tokens)
-    "WM_ODE_STEPS": 1,  # flow integration steps; None uses checkpoint; fewer steps = lower latency
+    "WM_ODE_STEPS": 2,  # flow integration steps; None uses checkpoint; fewer steps = lower latency
     "WM_TRAJECTORIES_PER_CYCLE": 100,  # X: completed trajectories per alternating retrain cycle
     "WM_EPOCHS_PER_CYCLE": 1,  # Y: WM train epochs per cycle
     "WM_TOTAL_TRAJECTORIES": 1000,  # Z: stop alternating collection after this many trajectories
@@ -586,8 +658,8 @@ DEFAULTS = {
     "WM_PRECISION": "fp16",  # fp32 | fp16 | bf16 autocast dtype for WM encoder/dynamics/decode
     "WM_TRAIN_ENCODER": False,  # also train the encoder during alternating cycles
     "WM_NO_TRAIN_DYNAMICS": False,  # skip dynamics updates during alternating cycles
-    "CURRENT_OBS_TYPE": "LATENT",  # RAW | LATENT | NONE
-    "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED | MIN-DECODED | CLOSEST-POINT | NONE
+    "CURRENT_OBS_TYPE": "LATENT",  # RAW follows ABLATION_SENSORS; WM still encodes the full image. LATENT | NONE
+    "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED (full image) | MIN-DECODED (per-sensor min) | CLOSEST-POINT | NONE
     "CONTACT_PRED": True,  # append WM contact-prediction flag to policy observations
 }
 
@@ -600,9 +672,9 @@ if __name__ == "__main__":
     #   Combine with semicolons: "FIELD:DIST:4.0;RAY:MINDIST:4.0"
     #
     PARAM_GRID = {
-        # "ABLATION_SEED": [43, 44, 45, 46, 47, 48, 49, 50, 51, 52],
+        "ABLATION_SEED": [48, 49, 50, 51, 52],
         # "ABLATION_SEED": [44, 45, 46, 47],
-        "ABLATION_SEED": [43],
+        # "ABLATION_SEED": [43],
         "ABLATION_SENSORS": [
             # ── Single sensor shapes ──────────────────────────────────
             # Field sensor (spherical detection)
@@ -611,8 +683,8 @@ if __name__ == "__main__":
             # "FIELD:EVENT:X",
             # "FIELD:TRUE_POS:X",
             # Ray sensor (8x8 grid)
-            "RAY:DIST:X",
-            # "RAY:MINDIST:X",
+            # "RAY:DIST:X",
+            "RAY:MINDIST:X",
             # "RAY:BIN:X",
             # "RAY:MINBIN:X",
             # "RAY:EVENT:X",
@@ -675,10 +747,12 @@ if __name__ == "__main__":
         # "WM_NO_AMP": [False],
         # "WM_TRAIN_ENCODER": [False],
         # "WM_NO_TRAIN_DYNAMICS": [False],
+        # RAW uses the sensor vector (MINDIST -> one distance per sensor). The WM still gets the full image.
+        # DECODED is the full decoded image. MIN-DECODED mins that image to one distance per sensor.
         # "CURRENT_OBS_TYPE": ["RAW", "LATENT", "NONE"],
-        "CURRENT_OBS_TYPE": ["LATENT", "NONE"],
+        "CURRENT_OBS_TYPE": ["RAW"],
         # "FUTURE_OBS_TYPE": ["LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "NONE"],
-        "FUTURE_OBS_TYPE": ["LATENT", "MIN-DECODED"],
+        "FUTURE_OBS_TYPE": ["MIN-DECODED"],
         "CONTACT_PRED": [True],
         # "WM_PRECISION": ["fp16", "bf16"],
         
@@ -691,6 +765,6 @@ if __name__ == "__main__":
         headless=True,
         task="Template-H12-Survive-Time-HYBRID",
         verbose=False,
-        save_video=False,
+        save_video=True,
         video_length=1000,
     )

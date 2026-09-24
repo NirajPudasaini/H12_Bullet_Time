@@ -101,6 +101,8 @@ Key hyperparameters:
 python scripts/rsl_rl/collect_data.py --task Template-H12-Bullet-Time-HYBRID --num_envs 64 --num_trajectories 100 --headless
 # or
 python scripts/rsl_rl/collect_data.py --task Template-H12-Survive-Time-HYBRID --num_envs 64 --num_trajectories 100 --headless --trajs_per_file 1000 --sensor_type CAP_TOF --static
+
+python scripts/rsl_rl/collect_data_2.py --trajs_per_file 1 --num_trajectories 1 --num_envs 1 --task Template-H12-Survive-Time-HYBRID --output_dir collected_data --headless
 ```
 --num_envs	64	Parallel environments
 --num_trajectories	100	Total trajectories to collect
@@ -110,3 +112,17 @@ python scripts/rsl_rl/collect_data.py --task Template-H12-Survive-Time-HYBRID --
 --trajs_per_file	50	Trajectories per H5 part file
 --sensor_type: CAP | TOF | CAP_TOF
 --static -> Restricts the robot from moving
+
+## Video Playback of World Model Trajectories
+
+WM inference settings (`inference_frames`, `context_stride`, `wm_contact_threshold`, checkpoint)
+are read from the PPO run's `params/world_model.yaml`. Omit `--checkpoint` to use the latest run.
+
+```bash
+cd H12_Bullet_Time/h12_bullet_time
+python scripts/rsl_rl/play_wm_record.py --task Template-H12-Survive-Time-WM --video_length 300
+```
+
+The script launches headless with cameras enabled so `RecordVideo` can capture `rgb_array` frames.
+World-model observations are saved as `wm_observations.png` (current / selected future / contact)
+and `wm_rollout.png` (all R predicted steps stacked above current). Both are timestamp-aligned.
