@@ -37,6 +37,9 @@ parser.add_argument("--wm_stochastic", action="store_true")
 parser.add_argument("--wm_no_amp", action="store_true")
 parser.add_argument("--inference_frames", type=int, default=1)
 parser.add_argument("--context_stride", type=int, default=1)
+parser.add_argument("--wm_current_obs_type", default="latent")
+parser.add_argument("--wm_future_obs_type", default="latent")
+parser.add_argument("--wm_contact_pred", default="true")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -187,10 +190,15 @@ class WMVecEnv(RslRlVecEnvWrapper):
         if self.num_actions != world_model.action_dim:
             raise ValueError(f"Environment has {self.num_actions} actions, WM expects {world_model.action_dim}")
         self.frame, self.sensor_names = _tof_frame(self)
-        self.features = world_model.initialize(self.frame)
+        robot = self.unwrapped.scene["robot"]
+        self.features = world_model.initialize(
+            self.frame, joint_pos=robot.data.joint_pos, joint_names=list(robot.joint_names),
+            sensor_names=self.sensor_names)
 
     def _augment(self, observations):
-        observations["policy"] = torch.cat((observations["policy"], self.features), -1)
+        for key in ("policy", "critic"):
+            if key in observations:
+                observations[key] = torch.cat((observations[key], self.features), -1)
         return observations
 
     def get_observations(self):
@@ -204,8 +212,11 @@ class WMVecEnv(RslRlVecEnvWrapper):
             raise RuntimeError("ToF sensor ordering changed")
         self.step_count += 1
         self.last_refreshed = self.step_count % self.inference_frames == 0
+        robot = self.unwrapped.scene["robot"]
         self.features = self.world_model.advance(
-            self.frame, applied, dones.bool(), refresh=self.last_refreshed)
+            self.frame, applied, dones.bool(), refresh=self.last_refreshed,
+            joint_pos=robot.data.joint_pos, joint_names=list(robot.joint_names),
+            sensor_names=self.sensor_names)
         return self._augment(observations), rewards, dones, extras
 
 
@@ -248,6 +259,9 @@ def main(env_cfg, agent_cfg):
         amp=not args_cli.wm_no_amp,
         contact_threshold=args_cli.wm_contact_threshold,
         context_stride=args_cli.context_stride,
+        current_obs_type=str(args_cli.wm_current_obs_type).lower().replace("_", "-"),
+        future_obs_type=str(args_cli.wm_future_obs_type).lower().replace("_", "-"),
+        include_contact=str(args_cli.wm_contact_pred).lower() in ("1", "true", "yes"),
     )
     env = WMVecEnv(env, agent_cfg.clip_actions, world_model, args_cli.inference_frames)
     if agent_cfg.class_name == "OnPolicyRunner":

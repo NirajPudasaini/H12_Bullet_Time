@@ -6,9 +6,10 @@ import subprocess
 import sys
 import json
 import smtplib
+import time
 from email.mime.text import MIMEText
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import product
 from dataclasses import dataclass, field, asdict
 from typing import Any
@@ -70,6 +71,39 @@ def _as_bool(v) -> bool:
     return str(v).lower() in ("1", "true", "yes")
 
 
+def _fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
+
+
+def _eta_text(done: int, total: int, elapsed: float) -> str:
+    if done <= 0:
+        return "ETA unknown until the first config finishes"
+    avg = elapsed / done
+    left = total - done
+    if left <= 0:
+        return f"all {total} configs done in {_fmt_duration(elapsed)}"
+    remaining = avg * left
+    finish = datetime.now() + timedelta(seconds=remaining)
+    return (
+        f"ETA {finish.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"({_fmt_duration(remaining)} left, avg {_fmt_duration(avg)}/config)"
+    )
+
+
+def _wm_run_suffix(params: dict) -> str:
+    cur = str(params.get("CURRENT_OBS_TYPE", "LATENT")).upper().replace("_", "-")
+    fut = str(params.get("FUTURE_OBS_TYPE", "LATENT")).upper().replace("_", "-")
+    contact = "CONTACT" if _as_bool(params.get("CONTACT_PRED", True)) else "NOCONTACT"
+    return f"CUR-{cur}-FUT-{fut}-{contact}"
+
+
 def _parse_wm_stats(output: str) -> dict:
     for line in reversed(output.splitlines()):
         if "[WM_STATS]" in line:
@@ -98,6 +132,9 @@ _WM_VALUE_FLAGS = {
     "WM_DATA_DIR": "--wm_data_dir",
     "WM_REPLAY_CYCLES": "--wm_replay_cycles",
     "WM_DIAG_INTERVAL": "--wm_diag_interval",
+    "CURRENT_OBS_TYPE": "--wm_current_obs_type",
+    "FUTURE_OBS_TYPE": "--wm_future_obs_type",
+    "CONTACT_PRED": "--wm_contact_pred",
 }
 _WM_BOOL_FLAGS = {
     "WM_STOCHASTIC": "--wm_stochastic",
@@ -120,6 +157,28 @@ def _append_wm_args(cmd: list[str], params: dict) -> None:
             cmd.append(flag)
 
 
+def _parse_train_log_dir(output: str) -> str:
+    log_dir = ""
+    for line in output.split("\n"):
+        if "Run log directory:" in line:
+            return line.split(":", 1)[-1].strip()
+        if "Logging experiment in directory:" in line:
+            log_dir = line.split(":", 1)[-1].strip()
+    return log_dir
+
+
+def _wm_play_fields(params: dict) -> dict:
+    inf, stride, thresh = params.get("INFERENCE_FRAMES"), params.get("CONTEXT_STRIDE"), params.get("WM_CONTACT_THRESHOLD")
+    return {
+        "inference_frames": None if inf in (None, "") else int(inf),
+        "context_stride": None if stride in (None, "") else int(stride),
+        "wm_contact_threshold": None if thresh in (None, "") else float(thresh),
+        "current_obs_type": None if params.get("CURRENT_OBS_TYPE") in (None, "") else str(params["CURRENT_OBS_TYPE"]),
+        "future_obs_type": None if params.get("FUTURE_OBS_TYPE") in (None, "") else str(params["FUTURE_OBS_TYPE"]),
+        "contact_pred": _as_bool(params.get("CONTACT_PRED", True)),
+    }
+
+
 @dataclass
 class AblationResult:
     params: dict
@@ -132,6 +191,12 @@ class AblationResult:
     wm_size: int | None = None
     wm_name: str | None = None
     traj_dir: str = ""
+    inference_frames: int | None = None
+    context_stride: int | None = None
+    wm_contact_threshold: float | None = None
+    current_obs_type: str | None = None
+    future_obs_type: str | None = None
+    contact_pred: bool | None = None
 
 
 def train_and_test(
@@ -160,6 +225,9 @@ def train_and_test(
         num_envs = int(params.get("ABLATION_NUM_ENVS", num_envs))
     
     sensor_tag = str(params.get("ABLATION_SENSORS", "")).replace(":", "-").replace(";", "_")
+    if use_wm:
+        suffix = f"WM-{_wm_run_suffix(params)}"
+        sensor_tag = f"{sensor_tag}-{suffix}" if sensor_tag else suffix
     train_script = "train_wm.py" if use_wm else "train.py"
     if use_wm and task == "Template-H12-Survive-Time-HYBRID":
         task = "Template-H12-Survive-Time-WM"
@@ -179,13 +247,8 @@ def train_and_test(
     
     print(f"\n{'='*60}\n[ABLATION] Training with params: {params}\n{'='*60}")
     train_returncode, train_output = run_cmd(train_cmd, env, verbose=verbose)
-    
-    log_dir = ""
-    for line in train_output.split("\n"):
-        if "Logging experiment in directory:" in line:
-            log_dir = line.split(":")[-1].strip()
-            break
-    
+
+    log_dir = _parse_train_log_dir(train_output)
     wm_stats = _parse_wm_stats(train_output) if use_wm else {}
     result = AblationResult(
         params=params,
@@ -195,6 +258,7 @@ def train_and_test(
         envs_per_s=wm_stats.get("envs_per_s"),
         wm_size=wm_stats.get("wm_size"),
         wm_name=wm_stats.get("wm_name"),
+        **(_wm_play_fields(params) if use_wm else {}),
     )
 
     if train_returncode != 0:
@@ -204,6 +268,8 @@ def train_and_test(
     if use_wm:
         print(
             f"[ABLATION] WM stats: name={result.wm_name}, size={result.wm_size}, "
+            f"inference_frames={result.inference_frames}, context_stride={result.context_stride}, "
+            f"contact_threshold={result.wm_contact_threshold}, "
             f"avg_inference_ms={result.avg_inference_ms}, "
             f"avg_inference_hz={result.avg_inference_hz}, envs_per_s={result.envs_per_s}"
         )
@@ -450,6 +516,7 @@ def load_cached_results(
                 if require_traj and not has_wm and not has_traj:
                     continue
                 if has_eval or has_wm:
+                    play = _wm_play_fields(full_params)
                     result = AblationResult(
                         params=full_params,
                         train_log_dir=existing.get("train_log_dir", ""),
@@ -461,6 +528,12 @@ def load_cached_results(
                         wm_size=existing.get("wm_size"),
                         wm_name=existing.get("wm_name"),
                         traj_dir=existing.get("traj_dir", ""),
+                        inference_frames=existing.get("inference_frames", play["inference_frames"]),
+                        context_stride=existing.get("context_stride", play["context_stride"]),
+                        wm_contact_threshold=existing.get("wm_contact_threshold", play["wm_contact_threshold"]),
+                        current_obs_type=existing.get("current_obs_type", play["current_obs_type"]),
+                        future_obs_type=existing.get("future_obs_type", play["future_obs_type"]),
+                        contact_pred=existing.get("contact_pred", play["contact_pred"]),
                     )
                     cached_results.append(result)
                     print(f"[ABLATION] Cache hit: {params} -> success={result.success}")
@@ -545,6 +618,7 @@ def run_ablation_study(
         )
 
     prev_seed = None
+    study_t0 = time.perf_counter()
     for i, params in enumerate(combinations):
         full_params = {**DEFAULTS, **params}
         config_seed = full_params.get("ABLATION_SEED", seed)
@@ -553,7 +627,9 @@ def run_ablation_study(
             _notify_seed_done(prev_seed)
         prev_seed = config_seed
 
-        print(f"\n[{i+1}/{total_to_run}] Running configuration...")
+        elapsed = time.perf_counter() - study_t0
+        print(f"\n[{i+1}/{total_to_run}] Running configuration... {_eta_text(i, total_to_run, elapsed)}")
+        cfg_t0 = time.perf_counter()
         rep = int(full_params.get("ABLATION_REPEAT", 0))
         if random_seed:
             run_seed = random.randint(0, 2**31 - 1)
@@ -594,6 +670,10 @@ def run_ablation_study(
         
         with open(output_file, "w") as f:
             json.dump([asdict(r) for r in results], f, indent=2)
+        print(
+            f"[ABLATION] Config {i+1}/{total_to_run} took {_fmt_duration(time.perf_counter() - cfg_t0)}; "
+            f"{_eta_text(i + 1, total_to_run, time.perf_counter() - study_t0)}"
+        )
 
     if prev_seed is not None:
         _notify_seed_done(prev_seed)
@@ -663,6 +743,9 @@ DEFAULTS = {
     "WM_NO_AMP": False,  # disable FP16 autocast
     "WM_TRAIN_ENCODER": False,  # also train the encoder during alternating cycles
     "WM_NO_TRAIN_DYNAMICS": False,  # skip dynamics updates during alternating cycles
+    "CURRENT_OBS_TYPE": "LATENT",  # RAW | LATENT | NONE
+    "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED | MIN-DECODED | CLOSEST-POINT | NONE
+    "CONTACT_PRED": True,  # append WM contact-prediction flag to policy observations
 }
 
 if __name__ == "__main__":
@@ -744,6 +827,9 @@ if __name__ == "__main__":
         # "WM_NO_AMP": [False],
         # "WM_TRAIN_ENCODER": [False],
         # "WM_NO_TRAIN_DYNAMICS": [False],
+        # "CURRENT_OBS_TYPE": ["RAW", "LATENT", "NONE"],
+        # "FUTURE_OBS_TYPE": ["LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "NONE"],
+        # "CONTACT_PRED": [True, False],
         
     }
     
@@ -757,8 +843,8 @@ if __name__ == "__main__":
         save_video=False,
         video_length=1000,
         collect_output_dir="collected_trajectories",
-        num_trajectories=500,
-        collect_num_envs=128,
-        collect_repeats=1,
+        num_trajectories=100,
+        collect_num_envs=512,
+        collect_repeats=10,
         random_seed=True,
     )

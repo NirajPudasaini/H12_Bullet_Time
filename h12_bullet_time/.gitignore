@@ -84,3 +84,6 @@ logs
 **/collected_datasets/
 **/collected_data/
 **/collected_trajectories (deterministic)/
+**/logs_archive/
+**/logs2/
+**/curated_ablations/
