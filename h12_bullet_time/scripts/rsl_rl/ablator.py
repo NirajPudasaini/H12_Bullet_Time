@@ -677,7 +677,7 @@ if __name__ == "__main__":
     #   Shapes:  FIELD, RAY, CONE
     #   Signals: DIST, MINDIST, BIN, MINBIN, TRUE_POS, ORACLE, EVENT
     #   Combine with semicolons: "FIELD:DIST:4.0;RAY:MINDIST:4.0"
-    #   ORACLE = launch target (anticipated impact point), revealed only while any sensor detects the ball
+    #   ORACLE = [ball xyz, impact xyz] (6), revealed only while any sensor detects the ball
     #
     PARAM_GRID = {
         # "ABLATION_SEED": [48, 49],
