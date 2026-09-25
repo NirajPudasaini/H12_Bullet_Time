@@ -93,12 +93,19 @@ def _true_pos_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
 
 
 def _oracle_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
-    """Anticipated impact point (launch target stored by launch_projectile_radial), gated like TRUE_POS."""
+    """TRUE_POS concatenated with the launch impact point, both gated by detection.
+
+    Layout per env: [ball_xyz (3), impact_xyz (3)], relative to the robot root.
+    """
+    robot_pos = env.scene["robot"].data.root_pos_w
+    ball_rel = env.scene["Projectile"].data.root_pos_w - robot_pos
     target_w = getattr(env, "_projectile_target_w", None)
     if target_w is None:
-        return torch.zeros((env.num_envs, 3), device=env.device)
-    rel_pos = target_w - env.scene["robot"].data.root_pos_w
-    return rel_pos * _any_detected(env, sensor_prefix).unsqueeze(-1).float()
+        impact_rel = torch.zeros_like(ball_rel)
+    else:
+        impact_rel = target_w - robot_pos
+    gate = _any_detected(env, sensor_prefix).unsqueeze(-1).float()
+    return torch.cat([ball_rel, impact_rel], dim=-1) * gate
 
 
 def sensor_obs_all(env: ManagerBasedRLEnv, specs: list) -> torch.Tensor:
