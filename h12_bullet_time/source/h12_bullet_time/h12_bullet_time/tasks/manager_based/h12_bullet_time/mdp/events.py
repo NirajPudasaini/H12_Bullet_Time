@@ -198,6 +198,12 @@ def launch_projectile_radial(
     proj.write_root_pose_to_sim(pose, env_ids)
     proj.write_root_velocity_to_sim(velocity, env_ids)
 
+    # Actual point the arc crosses target_xy (equals target_z unless elevation was clamped)
+    if not hasattr(env, "_projectile_target_w"):
+        env._projectile_target_w = torch.zeros((env.num_envs, 3), device=device, dtype=torch.float32)
+    env._projectile_target_w[env_ids, :2] = target_xy
+    env._projectile_target_w[env_ids, 2] = spawn_height + d * one_minus_f * torch.tan(elevation)
+
     if _throw_logging_enabled:
         if not hasattr(env, "_current_throws"):
             env._current_throws = [[] for _ in range(env.num_envs)]

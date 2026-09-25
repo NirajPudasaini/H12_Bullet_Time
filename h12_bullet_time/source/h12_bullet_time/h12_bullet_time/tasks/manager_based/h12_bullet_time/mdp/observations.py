@@ -26,7 +26,7 @@ def sensor_obs(env: ManagerBasedRLEnv, sensor_prefix: str, signal_type: str) -> 
     Args:
         env: Environment instance.
         sensor_prefix: Prefix to match sensor names (e.g., "field_0", "ray_1").
-        signal_type: One of "DIST", "MINDIST", "BIN", "MINBIN", "EVENT", "TRUE_POS".
+        signal_type: One of "DIST", "MINDIST", "BIN", "MINBIN", "EVENT", "TRUE_POS", "ORACLE".
 
     Returns:
         Observation tensor of shape (num_envs, features).
@@ -35,6 +35,8 @@ def sensor_obs(env: ManagerBasedRLEnv, sensor_prefix: str, signal_type: str) -> 
 
     if signal_type == "TRUE_POS":
         return _true_pos_gated(env, sensor_prefix)
+    if signal_type == "ORACLE":
+        return _oracle_gated(env, sensor_prefix)
 
     num_envs = env.num_envs
     all_data = []
@@ -70,8 +72,8 @@ def sensor_obs(env: ManagerBasedRLEnv, sensor_prefix: str, signal_type: str) -> 
     return torch.cat(all_data, dim=1)
 
 
-def _true_pos_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
-    """True position of projectile, gated by detection from sensors matching prefix."""
+def _any_detected(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
+    """(num_envs,) bool: projectile detected by any sensor matching prefix."""
     num_envs = env.num_envs
     any_detected = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
 
@@ -81,9 +83,22 @@ def _true_pos_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
                 continue
             detection = sensor.data.binary_detection
             any_detected |= (detection > 0.5).reshape(num_envs, -1).any(dim=1)
+    return any_detected
 
+
+def _true_pos_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
+    """True position of projectile, gated by detection from sensors matching prefix."""
     rel_pos = env.scene["Projectile"].data.root_pos_w - env.scene["robot"].data.root_pos_w
-    return rel_pos * any_detected.unsqueeze(-1).float()
+    return rel_pos * _any_detected(env, sensor_prefix).unsqueeze(-1).float()
+
+
+def _oracle_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
+    """Anticipated impact point (launch target stored by launch_projectile_radial), gated like TRUE_POS."""
+    target_w = getattr(env, "_projectile_target_w", None)
+    if target_w is None:
+        return torch.zeros((env.num_envs, 3), device=env.device)
+    rel_pos = target_w - env.scene["robot"].data.root_pos_w
+    return rel_pos * _any_detected(env, sensor_prefix).unsqueeze(-1).float()
 
 
 def sensor_obs_all(env: ManagerBasedRLEnv, specs: list) -> torch.Tensor:

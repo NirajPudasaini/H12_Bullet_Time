@@ -44,6 +44,7 @@ parser.add_argument("--wm_no_amp", action="store_true")
 parser.add_argument("--wm_precision", type=str.lower, choices=("fp32", "fp16", "bf16"), default=None)
 parser.add_argument("--inference_frames", type=int, default=None, help="Defaults to the run log.")
 parser.add_argument("--context_stride", type=int, default=None, help="Defaults to the run log.")
+parser.add_argument("--wm_rollout_frame", type=int, default=None, help="Defaults to the run log.")
 parser.add_argument("--wm_raw_signals", default=None, help="Defaults to the run log.")
 parser.add_argument("--wm_current_obs_type", default=None, help="Defaults to the run log.")
 parser.add_argument("--wm_future_obs_type", default=None, help="Defaults to the run log.")
@@ -400,6 +401,7 @@ def _apply_saved_wm_args(policy_dir):
         "wm_contact_threshold": saved.get("wm_contact_threshold"),
         "inference_frames": saved.get("inference_frames"),
         "context_stride": saved.get("context_stride"),
+        "wm_rollout_frame": saved.get("wm_rollout_frame"),
         "wm_batch_size": saved.get("wm_batch_size"),
         "wm_reduction": saved.get("wm_reduction"),
         "wm_ode_steps": saved.get("wm_ode_steps"),
@@ -413,6 +415,7 @@ def _apply_saved_wm_args(policy_dir):
         "wm_contact_threshold": 0.5,
         "inference_frames": 1,
         "context_stride": 1,
+        "wm_rollout_frame": -1,
         "wm_batch_size": 256,
         "wm_reduction": "mean",
         "wm_precision": "fp16",
@@ -435,6 +438,7 @@ def _apply_saved_wm_args(policy_dir):
         )
     args_cli.inference_frames = int(args_cli.inference_frames)
     args_cli.context_stride = int(args_cli.context_stride)
+    args_cli.wm_rollout_frame = int(args_cli.wm_rollout_frame)
     args_cli.wm_contact_threshold = float(args_cli.wm_contact_threshold)
     args_cli.wm_batch_size = int(args_cli.wm_batch_size)
     args_cli.wm_current_obs_type = str(args_cli.wm_current_obs_type).lower().replace("_", "-")
@@ -449,6 +453,7 @@ def _apply_saved_wm_args(policy_dir):
     print(
         f"[INFO] WM play: checkpoint={args_cli.wm_checkpoint} "
         f"inference_frames={args_cli.inference_frames} context_stride={args_cli.context_stride} "
+        f"rollout_frame={args_cli.wm_rollout_frame} "
         f"contact_threshold={args_cli.wm_contact_threshold} precision={args_cli.wm_precision} "
         f"ode_steps={args_cli.wm_ode_steps} stochastic={args_cli.wm_stochastic}"
     )
@@ -501,6 +506,7 @@ def main(env_cfg, agent_cfg):
         future_obs_type=args_cli.wm_future_obs_type,
         include_contact=args_cli.wm_contact_pred,
         raw_signals=resolve_raw_signals(args_cli.wm_raw_signals),
+        rollout_frame=args_cli.wm_rollout_frame,
     )
     env = WMRecordVecEnv(env, agent_cfg.clip_actions, world_model, args_cli.inference_frames)
     print(f"[WM_VERIFY] base_obs_dim={env.base_obs_dim} wm_feature_dim={world_model.feature_dim} "
@@ -603,6 +609,7 @@ def main(env_cfg, agent_cfg):
         "tokens_per_frame": world_model.model.dynamics.tokens_per_frame,
         "embedding_dim": world_model.model.dynamics.e_dim,
         "rollout_frames": world_model.rollout_frames,
+        "rollout_frame": world_model.rollout_frame,
         "contact_threshold": world_model.contact_threshold,
         "precision": world_model.precision,
         "storage_dtype": str(world_model.storage_dtype),

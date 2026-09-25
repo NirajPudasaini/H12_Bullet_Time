@@ -37,6 +37,7 @@ parser.add_argument("--wm_stochastic", action="store_true")
 parser.add_argument("--wm_no_amp", action="store_true")
 parser.add_argument("--inference_frames", type=int, default=1)
 parser.add_argument("--context_stride", type=int, default=1)
+parser.add_argument("--wm_rollout_frame", type=int, default=-1)
 parser.add_argument("--wm_raw_signals", default=None)
 parser.add_argument("--wm_current_obs_type", default="latent")
 parser.add_argument("--wm_future_obs_type", default="latent")
@@ -266,6 +267,7 @@ def main(env_cfg, agent_cfg):
         raw_signals=resolve_raw_signals(
             args_cli.wm_raw_signals, os.environ.get("ABLATION_SENSORS", "")
         ),
+        rollout_frame=args_cli.wm_rollout_frame,
     )
     env = WMVecEnv(env, agent_cfg.clip_actions, world_model, args_cli.inference_frames)
     if agent_cfg.class_name == "OnPolicyRunner":
