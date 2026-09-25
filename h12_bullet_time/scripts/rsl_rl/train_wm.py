@@ -38,6 +38,11 @@ parser.add_argument("--wm_mode", choices=("frozen", "alternating"), default="fro
 parser.add_argument("--wm_contact_threshold", type=float, default=0.5)
 parser.add_argument("--inference_frames", type=int, default=1)
 parser.add_argument("--context_stride", type=int, default=1)
+parser.add_argument(
+    "--wm_rollout_frame", type=int, default=-1,
+    help="1-based rollout frame passed as the future observation. "
+         "2 is the second predicted frame. -1 uses the first predicted contact, else the last frame.",
+)
 parser.add_argument("--wm_batch_size", type=int, default=256, help="Inference micro-batch size.")
 parser.add_argument("--wm_reduction", choices=("mean", "flatten"), default="mean")
 parser.add_argument("--wm_ode_steps", type=int, default=None)
@@ -338,6 +343,8 @@ def main(env_cfg, agent_cfg):
         raise ValueError("--inference_frames must be >= 1")
     if args_cli.context_stride < 1:
         raise ValueError("--context_stride must be >= 1")
+    if args_cli.wm_rollout_frame == 0 or args_cli.wm_rollout_frame < -1:
+        raise ValueError("--wm_rollout_frame must be -1 or a positive 1-based frame")
 
     # multi-gpu training configuration
     if args_cli.distributed:
@@ -421,6 +428,7 @@ def main(env_cfg, agent_cfg):
         future_obs_type=args_cli.wm_future_obs_type,
         include_contact=args_cli.wm_contact_pred,
         raw_signals=raw_signals,
+        rollout_frame=args_cli.wm_rollout_frame,
     )
     env = WorldModelVecEnvWrapper(
         env,
@@ -442,7 +450,7 @@ def main(env_cfg, agent_cfg):
     print(
         f"[INFO] Added {world_model.feature_dim} world-model features "
         f"(current={args_cli.wm_current_obs_type}, future={args_cli.wm_future_obs_type}, "
-        f"contact={args_cli.wm_contact_pred})"
+        f"rollout_frame={args_cli.wm_rollout_frame}, contact={args_cli.wm_contact_pred})"
     )
     print(f"[INFO] World model {wm_name}: {wm_size} parameters")
 

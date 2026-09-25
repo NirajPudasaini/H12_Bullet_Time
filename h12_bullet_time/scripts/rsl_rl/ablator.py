@@ -100,7 +100,12 @@ def _wm_run_suffix(params: dict) -> str:
     cur = str(params.get("CURRENT_OBS_TYPE", "LATENT")).upper().replace("_", "-")
     fut = str(params.get("FUTURE_OBS_TYPE", "LATENT")).upper().replace("_", "-")
     contact = "CONTACT" if _as_bool(params.get("CONTACT_PRED", True)) else "NOCONTACT"
-    return f"CUR-{cur}-FUT-{fut}-{contact}"
+    try:
+        frame = int(params.get("ROLLOUT_FRAME", -1))
+    except (TypeError, ValueError):
+        frame = -1
+    horizon = "AUTO" if frame < 0 else f"R{frame}"
+    return f"CUR-{cur}-FUT-{fut}-{horizon}-{contact}"
 
 
 def _parse_wm_stats(output: str) -> dict:
@@ -122,6 +127,7 @@ _WM_VALUE_FLAGS = {
     "WM_CONTACT_THRESHOLD": "--wm_contact_threshold",
     "INFERENCE_FRAMES": "--inference_frames",
     "CONTEXT_STRIDE": "--context_stride",
+    "ROLLOUT_FRAME": "--wm_rollout_frame",
     "WM_BATCH_SIZE": "--wm_batch_size",
     "WM_REDUCTION": "--wm_reduction",
     "WM_ODE_STEPS": "--wm_ode_steps",
@@ -636,17 +642,18 @@ DEFAULTS = {
     "ABLATION_PROJECTILE_MAX_HEIGHT": 3.0,
     "ABLATION_SEED": 42,
     "ABLATION_NUM_ENVS": 4096,
-    "USE_WORLD_MODEL": True,  # False: train.py + eval.py; True: train_wm.py
+    "USE_WORLD_MODEL": False,  # False: train.py + eval.py; True: train_wm.py
     "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S/tof_wm_2000_long.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
     "WM_CONFIG": None,  # YAML for checkpoints that lack an embedded config
     "WM_OUTPUT_CHECKPOINT": None,  # adapted-weight save path; default <checkpoint_stem>_robot.pt
     "WM_MODE": "frozen",  # frozen = infer only; alternating = collect trajectories and retrain
     "WM_CONTACT_THRESHOLD": 0.7,
-    "INFERENCE_FRAMES": 3, # Only run inference every N frames
-    "CONTEXT_STRIDE": 3, # 3 For 20 hz, 6 For 10 hz trained model 
+    "INFERENCE_FRAMES": 2, # Only run inference every N frames
+    "CONTEXT_STRIDE": 6, # 3 For 20 hz, 6 For 10 hz trained model
+    "ROLLOUT_FRAME": -1,  # 1-based future frame; 2 is the second prediction. -1 = first contact, else last frame 
     "WM_BATCH_SIZE": 1024,  # WM inference micro-batch size
     "WM_REDUCTION": "flatten",  # mean-pool latent tokens (flatten keeps all tokens)
-    "WM_ODE_STEPS": 2,  # flow integration steps; None uses checkpoint; fewer steps = lower latency
+    "WM_ODE_STEPS": 1,  # flow integration steps; None uses checkpoint; fewer steps = lower latency
     "WM_TRAJECTORIES_PER_CYCLE": 100,  # X: completed trajectories per alternating retrain cycle
     "WM_EPOCHS_PER_CYCLE": 1,  # Y: WM train epochs per cycle
     "WM_TOTAL_TRAJECTORIES": 1000,  # Z: stop alternating collection after this many trajectories
@@ -660,7 +667,7 @@ DEFAULTS = {
     "WM_NO_TRAIN_DYNAMICS": False,  # skip dynamics updates during alternating cycles
     "CURRENT_OBS_TYPE": "LATENT",  # RAW follows ABLATION_SENSORS; WM still encodes the full image. LATENT | NONE
     "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED (full image) | MIN-DECODED (per-sensor min) | CLOSEST-POINT | NONE
-    "CONTACT_PRED": True,  # append WM contact-prediction flag to policy observations
+    "CONTACT_PRED": False,  # append WM contact-prediction flag to policy observations
 }
 
 if __name__ == "__main__":
@@ -668,12 +675,13 @@ if __name__ == "__main__":
     #
     # ABLATION_SENSORS format: "SHAPE:SIGNAL:MAX_RANGE"
     #   Shapes:  FIELD, RAY, CONE
-    #   Signals: DIST, MINDIST, BIN, MINBIN, TRUE_POS, EVENT
+    #   Signals: DIST, MINDIST, BIN, MINBIN, TRUE_POS, ORACLE, EVENT
     #   Combine with semicolons: "FIELD:DIST:4.0;RAY:MINDIST:4.0"
+    #   ORACLE = launch target (anticipated impact point), revealed only while any sensor detects the ball
     #
     PARAM_GRID = {
-        "ABLATION_SEED": [48, 49],
-        # "ABLATION_SEED": [44, 45, 46, 47],
+        # "ABLATION_SEED": [48, 49],
+        "ABLATION_SEED": [47, 46, 45, 44, 43],
         # "ABLATION_SEED": [43],
         "ABLATION_SENSORS": [
             # ── Single sensor shapes ──────────────────────────────────
@@ -682,18 +690,21 @@ if __name__ == "__main__":
             # "FIELD:BIN:X",
             # "FIELD:EVENT:X",
             # "FIELD:TRUE_POS:X",
+            # "FIELD:ORACLE:X",
             # Ray sensor (8x8 grid)
             # "RAY:DIST:X",
-            "RAY:MINDIST:X",
+            # "RAY:MINDIST:X",
             # "RAY:BIN:X",
             # "RAY:MINBIN:X",
             # "RAY:EVENT:X",
             # "RAY:TRUE_POS:X",
+            "RAY:ORACLE:X",
             # Cone sensor (conical receptive field, 30° default)
             # "CONE:DIST:X",
             # "CONE:BIN:X",
             # "CONE:EVENT:X",
             # "CONE:TRUE_POS:X",
+            # "CONE:ORACLE:X",
             # ── Sensor combinations ───────────────────────────────────
             # "FIELD:DIST:X;RAY:DIST:X",
 
@@ -719,15 +730,15 @@ if __name__ == "__main__":
         # ── World-model inference-speed study ─────────────────────────
         # "USE_WORLD_MODEL": [True],
         # "ABLATION_NUM_ENVS": [1, 2, 4, 8, 16],
-        "WM_CHECKPOINT": [
-            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/tof_wm_2000.pt",
-            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S-e8/tof_wm.pt"
-            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S-e16/tof_wm.pt"
-            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/ToFWM-S-e8/tof_wm.pt"
-            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c5r12/ToFWM-S-e8/tof_wm.pt"
-            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/d5000enc-p6000dyn/ToFWM-S-e32/tof_wm.pt"
-            "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
-        ],
+        # "WM_CHECKPOINT": [
+        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/tof_wm_2000.pt",
+        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S-e8/tof_wm.pt"
+        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S-e16/tof_wm.pt"
+        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/ToFWM-S-e8/tof_wm.pt"
+        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c5r12/ToFWM-S-e8/tof_wm.pt"
+        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000enc-p12000dyn/ToFWM-S-e32/tof_wm.pt"
+        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        # ],
         # "WM_CONFIG": [None],
         # "WM_OUTPUT_CHECKPOINT": [None],
         # "WM_MODE": ["frozen"],
@@ -750,10 +761,10 @@ if __name__ == "__main__":
         # RAW uses the sensor vector (MINDIST -> one distance per sensor). The WM still gets the full image.
         # DECODED is the full decoded image. MIN-DECODED mins that image to one distance per sensor.
         # "CURRENT_OBS_TYPE": ["RAW", "LATENT", "NONE"],
-        "CURRENT_OBS_TYPE": ["RAW", "LATENT"],
+        # "CURRENT_OBS_TYPE": ["RAW"],
         # "FUTURE_OBS_TYPE": ["LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "NONE"],
-        "FUTURE_OBS_TYPE": ["MIN-DECODED", "CLOSEST-POINT"],
-        "CONTACT_PRED": [True],
+        # "FUTURE_OBS_TYPE": ["MIN-DECODED"],
+        # "CONTACT_PRED": [True],
         # "WM_PRECISION": ["fp16", "bf16"],
         
     }
@@ -765,6 +776,6 @@ if __name__ == "__main__":
         headless=True,
         task="Template-H12-Survive-Time-HYBRID",
         verbose=False,
-        save_video=True,
+        save_video=False,
         video_length=1000,
     )
