@@ -3,9 +3,13 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
+
 from isaaclab.utils import configclass
 
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+
+_hidden_dims = [int(d) for d in os.environ.get("ABLATION_HIDDEN_DIMS", "512,512").split(",")]
 
 
 @configclass
@@ -18,8 +22,10 @@ class PPORunnerCfg(RslRlOnPolicyRunnerCfg):
         init_noise_std=1.0,
         actor_obs_normalization=True,
         critic_obs_normalization=True,
-        actor_hidden_dims=[32, 32], # Next try [512, 256, 128]
-        critic_hidden_dims=[32, 32], # Next try [512, 256, 128]
+        # actor_hidden_dims=[32, 32], 
+        # critic_hidden_dims=[32, 32], 
+        actor_hidden_dims=_hidden_dims,
+        critic_hidden_dims=_hidden_dims,
         activation="elu",
     )
     algorithm = RslRlPpoAlgorithmCfg(

@@ -118,6 +118,10 @@ def _wm_run_suffix(params: dict) -> str:
     return f"CUR-{cur}-FUT-{fut}-{horizon}-{contact}"
 
 
+def _hidden_dims_tag(params: dict) -> str:
+    return str(params.get("ABLATION_HIDDEN_DIMS", "512,512")).replace(" ", "").replace(",", "x")
+
+
 def _parse_wm_stats(output: str) -> dict:
     for line in reversed(output.splitlines()):
         if "[WM_STATS]" in line:
@@ -241,6 +245,7 @@ def train_and_test(
         num_envs = int(params.get("ABLATION_NUM_ENVS", num_envs))
     
     sensor_tag = str(params.get("ABLATION_SENSORS", "")).replace(":", "-").replace(";", "_")
+    sensor_tag += f"-HD{_hidden_dims_tag(params)}"
     if use_wm:
         suffix = f"WM-{_wm_run_suffix(params)}"
         sensor_tag = f"{sensor_tag}-{suffix}" if sensor_tag else suffix
@@ -637,7 +642,7 @@ def run_ablation_study(
                 f"avg_inference_ms={r.avg_inference_ms}, "
                 f"hz={r.avg_inference_hz}, envs_per_s={r.envs_per_s}"
             )
-        print(f"  {r.params} -> success={r.success}{extra}")
+        print(f"  {r.params} -> hidden_dims={_hidden_dims_tag(r.params)}, success={r.success}{extra}")
     print(f"\nResults saved to: {output_file}")
     
     return results
@@ -663,7 +668,8 @@ DEFAULTS = {
     "ABLATION_PROJECTILE_MAX_HEIGHT": 3.0,
     "ABLATION_SEED": 42,
     "ABLATION_NUM_ENVS": 4096,
-    "USE_WORLD_MODEL": False,  # False: train.py + eval.py; True: train_wm.py
+    "ABLATION_HIDDEN_DIMS": "32,32",  # shared actor/critic hidden dims, comma-separated
+    "USE_WORLD_MODEL": True,  # False: train.py + eval.py; True: train_wm.py
     "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S/tof_wm_2000_long.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
     "WM_CONFIG": None,  # YAML for checkpoints that lack an embedded config
     "WM_OUTPUT_CHECKPOINT": None,  # adapted-weight save path; default <checkpoint_stem>_robot.pt
@@ -671,6 +677,7 @@ DEFAULTS = {
     "WM_CONTACT_THRESHOLD": 0.7,
     "INFERENCE_FRAMES": 2, # Only run inference every N frames
     "CONTEXT_STRIDE": 6, # 3 For 20 hz, 6 For 10 hz trained model
+    "ORACLE_ROLLOUT_FRAMES": 9,  # ORACLE-CP horizon R in frames of CONTEXT_STRIDE steps (match the PWM's R)
     "ROLLOUT_FRAME": -1,  # 1-based future frame; 2 is the second prediction. -1 = first contact, else last frame 
     "WM_BATCH_SIZE": 1024,  # WM inference micro-batch size
     "WM_REDUCTION": "flatten",  # mean-pool latent tokens (flatten keeps all tokens)
@@ -696,15 +703,16 @@ if __name__ == "__main__":
     #
     # ABLATION_SENSORS format: "SHAPE:SIGNAL:MAX_RANGE"
     #   Shapes:  FIELD, RAY, CONE
-    #   Signals: DIST, MINDIST, BIN, MINBIN, TRUE_POS, ORACLE, EVENT
+    #   Signals: DIST, MINDIST, BIN, MINBIN, TRUE_POS, ORACLE, ORACLE-CP, EVENT
     #   Combine with semicolons: "FIELD:DIST:4.0;RAY:MINDIST:4.0"
     #   ORACLE = [ball xyz, impact xyz] (6), revealed only while any sensor detects the ball
+    #   ORACLE-CP = [ball xyz, target xyz if contact within R else ball xyz at R, contact] (7), same gating
     #
     PARAM_GRID = {
         # "ABLATION_SEED": [48, 49],
-        "ABLATION_SEED": [43, 44,45, 46, 47],
+        # "ABLATION_SEED": [43, 44,45, 46, 47],
         # "ABLATION_SEED": [43],
-        "ABLATION_SENSORS": [
+        # "ABLATION_SENSORS": [
             # ── Single sensor shapes ──────────────────────────────────
             # Field sensor (spherical detection)
             # "FIELD:DIST:X",
@@ -719,7 +727,7 @@ if __name__ == "__main__":
             # "RAY:MINBIN:X",
             # "RAY:EVENT:X",
             # "RAY:TRUE_POS:X",
-            "RAY:ORACLE:X",
+            # "RAY:ORACLE:X",
             # Cone sensor (conical receptive field, 30° default)
             # "CONE:DIST:X",
             # "CONE:BIN:X",
@@ -733,7 +741,7 @@ if __name__ == "__main__":
             # "FIELD:DIST:X;FIELD:BIN:X",
             # "RAY:DIST:X;RAY:BIN:X",
             # "CONE:DIST:X;CONE:BIN:X",
-        ],
+        # ],
         # --- Multimodel testing ---
         # "ABLATION_SENSORS": [
         #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
@@ -758,7 +766,7 @@ if __name__ == "__main__":
         #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/ToFWM-S-e8/tof_wm.pt"
         #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c5r12/ToFWM-S-e8/tof_wm.pt"
         #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000enc-p12000dyn/ToFWM-S-e32/tof_wm.pt"
-        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
         # ],
         # "WM_CONFIG": [None],
         # "WM_OUTPUT_CHECKPOINT": [None],
@@ -782,12 +790,52 @@ if __name__ == "__main__":
         # RAW uses the sensor vector (MINDIST -> one distance per sensor). The WM still gets the full image.
         # DECODED is the full decoded image. MIN-DECODED mins that image to one distance per sensor.
         # "CURRENT_OBS_TYPE": ["RAW", "LATENT", "NONE"],
-        # "CURRENT_OBS_TYPE": ["RAW"],
+        # "CURRENT_OBS_TYPE": ["LATENT"],
         # "FUTURE_OBS_TYPE": ["LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "NONE"],
-        # "FUTURE_OBS_TYPE": ["MIN-DECODED"],
+        # "FUTURE_OBS_TYPE": ["LATENT", "NONE"],
         # "CONTACT_PRED": [True],
         # "WM_PRECISION": ["fp16", "bf16"],
-        
+
+        ####### Oracle Model size study #######
+        # "ABLATION_SENSORS": ["RAY:ORACLE:X"],
+        # "CURRENT_OBS_TYPE": ["RAW"],
+        # "USE_WORLD_MODEL": [False],
+
+        ####### Min Dist WM Study #######
+        # "ABLATION_SEED": [43, 44, 45, 46, 47],
+        # "ABLATION_HIDDEN_DIMS": ["512,512", "128,128"],
+        # "ABLATION_SENSORS": ["RAY:MINDIST:X"],
+        # "CURRENT_OBS_TYPE": ["RAW"],
+        # "FUTURE_OBS_TYPE": ["MIN-DECODED"],
+        # "USE_WORLD_MODEL": [True],
+        # "WM_CHECKPOINT": [
+        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        # ],
+        # "CONTACT_PRED": [True],
+
+        # ####### Latent Future WM Study #######
+        # "ABLATION_SEED": [43, 44, 45, 46, 47],
+        # "ABLATION_HIDDEN_DIMS": ["32,32", "512,512", "128,128"],
+        # "ABLATION_SENSORS": ["RAY:DIST:X"],
+        # "CURRENT_OBS_TYPE": ["LATENT"],
+        # "FUTURE_OBS_TYPE": ["LATENT"],
+        # "USE_WORLD_MODEL": [True],
+        # "WM_CHECKPOINT": [
+        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        # ],
+        # "CONTACT_PRED": [True],
+
+        ####### f_psi WM Study #######
+        "ABLATION_SEED": [43, 44, 45, 46, 47],
+        "ABLATION_HIDDEN_DIMS": ["512,512", "128,128"],
+        "ABLATION_SENSORS": ["RAY:DIST:X"],
+        "CURRENT_OBS_TYPE": ["LATENT"],
+        "FUTURE_OBS_TYPE": ["NONE"],
+        "USE_WORLD_MODEL": [True],
+        "WM_CHECKPOINT": [
+            "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        ],
+        "CONTACT_PRED": [False],
     }
     
     run_ablation_study(

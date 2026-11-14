@@ -1,8 +1,13 @@
 """Observation functions for H12 Bullet Time environment."""
 from __future__ import annotations
 
+import os
+import xml.etree.ElementTree as ET
+
+import numpy as np
 import torch
 from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.utils.math import quat_apply_inverse
 
 from isaaclab.envs.mdp import (
     base_ang_vel,
@@ -26,7 +31,7 @@ def sensor_obs(env: ManagerBasedRLEnv, sensor_prefix: str, signal_type: str) -> 
     Args:
         env: Environment instance.
         sensor_prefix: Prefix to match sensor names (e.g., "field_0", "ray_1").
-        signal_type: One of "DIST", "MINDIST", "BIN", "MINBIN", "EVENT", "TRUE_POS", "ORACLE".
+        signal_type: One of "DIST", "MINDIST", "BIN", "MINBIN", "EVENT", "TRUE_POS", "ORACLE", "ORACLE-CP".
 
     Returns:
         Observation tensor of shape (num_envs, features).
@@ -37,6 +42,8 @@ def sensor_obs(env: ManagerBasedRLEnv, sensor_prefix: str, signal_type: str) -> 
         return _true_pos_gated(env, sensor_prefix)
     if signal_type == "ORACLE":
         return _oracle_gated(env, sensor_prefix)
+    if signal_type == "ORACLE-CP":
+        return _oracle_cp_gated(env, sensor_prefix)
 
     num_envs = env.num_envs
     all_data = []
@@ -106,6 +113,95 @@ def _oracle_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
         impact_rel = target_w - robot_pos
     gate = _any_detected(env, sensor_prefix).unsqueeze(-1).float()
     return torch.cat([ball_rel, impact_rel], dim=-1) * gate
+
+
+_COLLISION_PARTS: dict = {}
+
+
+def _robot_collision_parts(env: ManagerBasedRLEnv, num_points: int = 1024):
+    """URDF collision geometry sampled as surface points in each body frame.
+
+    Returns (body_idx (L,), points (L, P, 3), bound_center (L, 3), bound_radius (L,)).
+    """
+    if "parts" in _COLLISION_PARTS:
+        return _COLLISION_PARTS["parts"]
+    import trimesh
+
+    robot = env.scene["robot"]
+    urdf = robot.cfg.spawn.asset_path
+    bodies = list(robot.body_names)
+    body_idx, points = [], []
+    for link in ET.parse(urdf).getroot().findall("link"):
+        if link.get("name") not in bodies:
+            continue
+        for col in link.findall("collision"):
+            geom = col.find("geometry")[0]
+            if geom.tag == "mesh":
+                mesh = trimesh.load(os.path.join(os.path.dirname(urdf), geom.get("filename")), force="mesh")
+                if geom.get("scale"):
+                    mesh.apply_scale([float(v) for v in geom.get("scale").split()])
+            elif geom.tag == "cylinder":
+                mesh = trimesh.creation.cylinder(radius=float(geom.get("radius")), height=float(geom.get("length")))
+            elif geom.tag == "box":
+                mesh = trimesh.creation.box(extents=[float(v) for v in geom.get("size").split()])
+            elif geom.tag == "sphere":
+                mesh = trimesh.creation.icosphere(radius=float(geom.get("radius")))
+            else:
+                continue
+            origin = col.find("origin")
+            if origin is not None:
+                tf = trimesh.transformations.euler_matrix(*[float(v) for v in origin.get("rpy", "0 0 0").split()], axes="sxyz")
+                tf[:3, 3] = [float(v) for v in origin.get("xyz", "0 0 0").split()]
+                mesh.apply_transform(tf)
+            body_idx.append(bodies.index(link.get("name")))
+            points.append(trimesh.sample.sample_surface(mesh, num_points, seed=0)[0])
+    pts = torch.tensor(np.stack(points), dtype=torch.float32, device=env.device)
+    center = (pts.amin(1) + pts.amax(1)) / 2
+    radius = (pts - center[:, None]).norm(dim=-1).amax(1)
+    _COLLISION_PARTS["parts"] = (torch.tensor(body_idx, device=env.device), pts, center, radius)
+    return _COLLISION_PARTS["parts"]
+
+
+def _robot_occupies(env: ManagerBasedRLEnv, centers_w: torch.Tensor, radius: float) -> torch.Tensor:
+    """(num_envs,) bool: robot collision geometry intersects the sphere (centers_w, radius)."""
+    body_idx, points, bound_center, bound_radius = _robot_collision_parts(env)
+    data = env.scene["robot"].data
+    local = quat_apply_inverse(data.body_quat_w[:, body_idx], centers_w[:, None] - data.body_pos_w[:, body_idx])
+    env_ids, part_ids = ((local - bound_center).norm(dim=-1) < bound_radius + radius).nonzero(as_tuple=True)
+    # Surface-only test: valid because every H1-2 link is thinner than the ball diameter.
+    hit = (points[part_ids] - local[env_ids, part_ids, None]).norm(dim=-1).amin(1) < radius
+    occupied = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    occupied[env_ids[hit]] = True
+    return occupied
+
+
+def _oracle_cp_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
+    """Ground-truth counterpart of the PWM observation [f_tp(x_t), f_tp(x_k), c_k], gated by detection.
+
+    Layout per env: [ball_xyz (3), future_xyz (3), contact (1)], relative to the robot root.
+    The horizon is R = ORACLE_ROLLOUT_FRAMES frames of CONTEXT_STRIDE control steps. If the ball's
+    ballistic path reaches its launch target within R while the robot occupies a ball-sized sphere
+    there, contact = 1 and future_xyz is the target; otherwise future_xyz is the ball center at R.
+    """
+    robot_pos = env.scene["robot"].data.root_pos_w
+    ball = env.scene["Projectile"]
+    pos, vel = ball.data.root_pos_w, ball.data.root_lin_vel_w
+    radius = float(ball.cfg.spawn.radius)
+    g = torch.tensor(env.cfg.sim.gravity, dtype=pos.dtype, device=env.device)
+    horizon = int(os.environ.get("ORACLE_ROLLOUT_FRAMES", 9)) * int(os.environ.get("CONTEXT_STRIDE", 6)) * env.step_dt
+    future = pos + vel * horizon + 0.5 * g * horizon**2
+    future[:, 2] = future[:, 2].clamp(min=radius)
+    contact = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    target = getattr(env, "_projectile_target_w", None)
+    if target is not None:
+        v_xy = vel[:, :2]
+        t_hit = ((target[:, :2] - pos[:, :2]) * v_xy).sum(-1) / v_xy.pow(2).sum(-1).clamp(min=1e-6)
+        at_hit = pos + vel * t_hit[:, None] + 0.5 * g * t_hit[:, None] ** 2
+        on_course = (t_hit >= 0) & (t_hit <= horizon) & ((at_hit - target).norm(dim=-1) < radius)
+        contact = on_course & _robot_occupies(env, target, radius)
+        future = torch.where(contact[:, None], target, future)
+    gate = _any_detected(env, sensor_prefix).unsqueeze(-1).float()
+    return torch.cat([pos - robot_pos, future - robot_pos, contact.unsqueeze(-1).float()], dim=-1) * gate
 
 
 def sensor_obs_all(env: ManagerBasedRLEnv, specs: list) -> torch.Tensor:

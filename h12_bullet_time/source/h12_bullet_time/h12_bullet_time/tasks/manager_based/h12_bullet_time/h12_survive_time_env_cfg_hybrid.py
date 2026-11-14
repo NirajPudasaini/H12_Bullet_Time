@@ -89,6 +89,7 @@ _termination_height_threshold = float(os.environ.get("ABLATION_TERMINATION_HEIGH
 #   "CONE:EVENT:X;RAY:MINDIST:4.0"          cone uses ABLATION_MAX_RANGE, ray fixed at 4.0
 #   "RAY:TRUE_POS:X"                         projectile position, gated by any ray detection
 #   "RAY:ORACLE:X"                           [ball xyz, impact xyz] (6), gated like TRUE_POS
+#   "RAY:ORACLE-CP:X"                        [ball xyz, contact/R-horizon xyz, contact bit] (7), gated like TRUE_POS
 _default_max_range = float(os.environ.get("ABLATION_MAX_RANGE", 4.0))
 _sensors_str = os.environ.get("ABLATION_SENSORS", _DEFAULT_SENSORS)
 _sensor_specs = []

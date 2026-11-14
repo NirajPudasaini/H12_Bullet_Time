@@ -1,5 +1,7 @@
 logs/
+logs_wm/
 ablation_results/
+ablation_results_wm/
 outputs/
 .env
 **/.env

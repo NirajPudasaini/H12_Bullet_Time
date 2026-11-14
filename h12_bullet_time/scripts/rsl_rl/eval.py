@@ -157,6 +157,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device else env_cfg.sim.device
+    agent_cfg.device = args_cli.device if args_cli.device else agent_cfg.device
 
     # Get checkpoint
     log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
