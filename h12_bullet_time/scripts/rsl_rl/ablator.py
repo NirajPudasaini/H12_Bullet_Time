@@ -666,7 +666,7 @@ DEFAULTS = {
     "WM_TRAIN_ENCODER": False,  # also train the encoder during alternating cycles
     "WM_NO_TRAIN_DYNAMICS": False,  # skip dynamics updates during alternating cycles
     "CURRENT_OBS_TYPE": "LATENT",  # RAW follows ABLATION_SENSORS; WM still encodes the full image. LATENT | NONE
-    "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED (full image) | MIN-DECODED (per-sensor min) | CLOSEST-POINT | NONE
+    "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED (full image) | MIN-DECODED (per-sensor min) | CLOSEST-POINT | NONE | EMPTY | NOISE | REDUNDANT (see REBUTTAL.md)
     "CONTACT_PRED": False,  # append WM contact-prediction flag to policy observations
 }
 
@@ -681,38 +681,37 @@ if __name__ == "__main__":
     #
     PARAM_GRID = {
         # "ABLATION_SEED": [48, 49],
-        "ABLATION_SEED": [47, 46, 45, 44, 43],
         # "ABLATION_SEED": [43],
-        "ABLATION_SENSORS": [
-            # ── Single sensor shapes ──────────────────────────────────
-            # Field sensor (spherical detection)
-            # "FIELD:DIST:X",
-            # "FIELD:BIN:X",
-            # "FIELD:EVENT:X",
-            # "FIELD:TRUE_POS:X",
-            # "FIELD:ORACLE:X",
-            # Ray sensor (8x8 grid)
-            # "RAY:DIST:X",
-            # "RAY:MINDIST:X",
-            # "RAY:BIN:X",
-            # "RAY:MINBIN:X",
-            # "RAY:EVENT:X",
-            # "RAY:TRUE_POS:X",
-            "RAY:ORACLE:X",
-            # Cone sensor (conical receptive field, 30° default)
-            # "CONE:DIST:X",
-            # "CONE:BIN:X",
-            # "CONE:EVENT:X",
-            # "CONE:TRUE_POS:X",
-            # "CONE:ORACLE:X",
-            # ── Sensor combinations ───────────────────────────────────
-            # "FIELD:DIST:X;RAY:DIST:X",
+        # "ABLATION_SENSORS": [
+        #     # ── Single sensor shapes ──────────────────────────────────
+        #     # Field sensor (spherical detection)
+        #     # "FIELD:DIST:X",
+        #     # "FIELD:BIN:X",
+        #     # "FIELD:EVENT:X",
+        #     # "FIELD:TRUE_POS:X",
+        #     # "FIELD:ORACLE:X",
+        #     # Ray sensor (8x8 grid)
+        #     # "RAY:DIST:X",
+        #     "RAY:MINDIST:X",
+        #     # "RAY:BIN:X",
+        #     # "RAY:MINBIN:X",
+        #     # "RAY:EVENT:X",
+        #     "RAY:TRUE_POS:X",
+        #     # "RAY:ORACLE:X",
+        #     # Cone sensor (conical receptive field, 30° default)
+        #     # "CONE:DIST:X",
+        #     # "CONE:BIN:X",
+        #     # "CONE:EVENT:X",
+        #     # "CONE:TRUE_POS:X",
+        #     # "CONE:ORACLE:X",
+        #     # ── Sensor combinations ───────────────────────────────────
+        #     # "FIELD:DIST:X;RAY:DIST:X",
 
-            #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
-            # "FIELD:DIST:X;FIELD:BIN:X",
-            # "RAY:DIST:X;RAY:BIN:X",
-            # "CONE:DIST:X;CONE:BIN:X",
-        ],
+        #     #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
+        #     # "FIELD:DIST:X;FIELD:BIN:X",
+        #     # "RAY:DIST:X;RAY:BIN:X",
+        #     # "CONE:DIST:X;CONE:BIN:X",
+        # ],
         # --- Multimodel testing ---
         # "ABLATION_SENSORS": [
         #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
@@ -725,7 +724,7 @@ if __name__ == "__main__":
 
         # Test case
         # "ABLATION_SENSORS": ["FIELD:EVENT:X;FIELD:MINDIST:X"],
-        # "ABLATION_MAX_RANGE": [2.0],
+        "ABLATION_MAX_RANGE": [2.0],
 
         # ── World-model inference-speed study ─────────────────────────
         # "USE_WORLD_MODEL": [True],
@@ -737,7 +736,7 @@ if __name__ == "__main__":
         #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/ToFWM-S-e8/tof_wm.pt"
         #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c5r12/ToFWM-S-e8/tof_wm.pt"
         #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000enc-p12000dyn/ToFWM-S-e32/tof_wm.pt"
-        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
         # ],
         # "WM_CONFIG": [None],
         # "WM_OUTPUT_CHECKPOINT": [None],
@@ -766,7 +765,33 @@ if __name__ == "__main__":
         # "FUTURE_OBS_TYPE": ["MIN-DECODED"],
         # "CONTACT_PRED": [True],
         # "WM_PRECISION": ["fp16", "bf16"],
-        
+
+        # Dimensionality study
+        # "USE_WORLD_MODEL": [True],
+        # "ABLATION_SENSORS": [
+        #     # "RAY:MINDIST:X",
+        #     # "RAY:TRUE_POS:X",
+        #     "RAY:DIST:X",
+        # ],
+        # "WM_CHECKPOINT": [
+        #     "/home/carson/isaac-lab/bullet_time_data_processing/checkpoints/ToFWM-S-e8/tof_wm.pt"
+        # ],
+        # "CURRENT_OBS_TYPE": ["LATENT"],
+        # "FUTURE_OBS_TYPE": ["EMPTY", "NOISE", "REDUNDANT"],
+        # "CONTACT_PRED": [True],
+
+        # Fixing missed runs
+        "ABLATION_SEED": [45, 48, 49, 50, 51, 52],
+        "USE_WORLD_MODEL": [True],
+        "ABLATION_SENSORS": [
+            "RAY:DIST:X",
+        ],
+        "WM_CHECKPOINT": [
+            "/home/carson/isaac-lab/bullet_time_data_processing/checkpoints/ToFWM-S-e8/tof_wm.pt"
+        ],
+        "CURRENT_OBS_TYPE": ["LATENT"],
+        "FUTURE_OBS_TYPE": ["NONE"],
+        "CONTACT_PRED": [False],
     }
     
     run_ablation_study(

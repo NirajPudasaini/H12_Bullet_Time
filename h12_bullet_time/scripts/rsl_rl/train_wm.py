@@ -66,15 +66,17 @@ parser.add_argument(
 parser.add_argument(
     "--wm_future_obs_type",
     type=lambda s: str(s).lower().replace("_", "-"),
-    choices=("latent", "decoded", "min-decoded", "closest-point", "none"),
+    choices=("latent", "decoded", "min-decoded", "closest-point", "empty", "noise", "redundant", "none"),
     default="latent",
     help="Selected future observation. DECODED is the full decoded distance image. "
-         "MIN-DECODED is that image reduced to one closest distance per sensor.",
+         "MIN-DECODED is that image reduced to one closest distance per sensor. "
+         "EMPTY/NOISE/REDUNDANT are zeros/U(0,1)/a copy shaped like the current observation; "
+         "they skip WM inference and replace the contact flag (NOISE: U(0,1), else 0).",
 )
 parser.add_argument(
     "--wm_raw_signals",
     default=None,
-    help="Comma-separated DIST/MINDIST reductions for RAW. "
+    help="Comma-separated DIST/MINDIST/TRUE_POS reductions for RAW. "
          "Default: ray signals from ABLATION_SENSORS.",
 )
 parser.add_argument(
@@ -136,6 +138,7 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import h12_bullet_time.tasks  # noqa: F401
+from h12_bullet_time.tasks.manager_based.h12_bullet_time.mdp.observations import _true_pos_gated
 
 try:
     from trybrid_skin import TOFTrajectoryCollector, TOFWorldModel, resolve_raw_signals
@@ -221,7 +224,7 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
         self.features = self._timed_infer(
             lambda: self.world_model.initialize(
                 self.frame, joint_pos=joint_pos, joint_names=joint_names,
-                sensor_names=self.sensor_names))
+                sensor_names=self.sensor_names, true_pos=self._true_pos()))
         if mode == "alternating":
             step_dt = getattr(self.unwrapped, "step_dt", None) or (
                 self.unwrapped.cfg.sim.dt * self.unwrapped.cfg.decimation
@@ -234,6 +237,11 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
                 self.world_model.context_frames + self.world_model.rollout_frames,
                 1.0 / float(step_dt),
             )
+
+    def _true_pos(self):
+        if "TRUE_POS" not in self.world_model.raw_signals:
+            return None
+        return _true_pos_gated(self.unwrapped, "tof_sensor")
 
     def _augment(self, observations):
         for key in ("policy", "critic"):
@@ -270,7 +278,8 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
         joint_pos, joint_names = _joint_state(self)
         infer = lambda: self.world_model.advance(
             self.frame, applied_actions, dones.bool(), refresh=refresh,
-            joint_pos=joint_pos, joint_names=joint_names, sensor_names=self.sensor_names)
+            joint_pos=joint_pos, joint_names=joint_names, sensor_names=self.sensor_names,
+            true_pos=self._true_pos())
         self.features = self._timed_infer(infer) if refresh else infer()
         return self._augment(observations), rewards, dones, extras
 
