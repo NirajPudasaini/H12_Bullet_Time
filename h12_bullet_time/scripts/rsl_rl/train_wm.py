@@ -66,12 +66,15 @@ parser.add_argument(
 parser.add_argument(
     "--wm_future_obs_type",
     type=lambda s: str(s).lower().replace("_", "-"),
-    choices=("latent", "decoded", "min-decoded", "closest-point", "empty", "noise", "redundant", "none"),
+    choices=("latent", "decoded", "min-decoded", "closest-point", "empty", "noise", "redundant", "none",
+             "sim-raw", "sim-mindist", "sim-latent"),
     default="latent",
     help="Selected future observation. DECODED is the full decoded distance image. "
          "MIN-DECODED is that image reduced to one closest distance per sensor. "
          "EMPTY/NOISE/REDUNDANT are zeros/U(0,1)/a copy shaped like the current observation; "
-         "they skip WM inference and replace the contact flag (NOISE: U(0,1), else 0).",
+         "they skip WM inference and replace the contact flag (NOISE: U(0,1), else 0). "
+         "SIM-RAW/SIM-MINDIST/SIM-LATENT read the Future_Projectile image from the Perfect-WM task "
+         "(raw, per-sensor min, encoder latent) and use the sim contact flag; they skip the dynamics rollout.",
 )
 parser.add_argument(
     "--wm_raw_signals",
@@ -139,6 +142,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import h12_bullet_time.tasks  # noqa: F401
 from h12_bullet_time.tasks.manager_based.h12_bullet_time.mdp.observations import _true_pos_gated
+from sim_future import SIM_FUTURE_OBS_TYPES, require_future_projectile, sim_future_features
 
 try:
     from trybrid_skin import TOFTrajectoryCollector, TOFWorldModel, resolve_raw_signals
@@ -167,17 +171,17 @@ def _tof_name(name):
     return f"tof_sensor_{name}"
 
 
-def _tof_frame(env):
+def _tof_frame(env, attr="dist_est_normalized"):
     sensors = []
     for name, sensor in getattr(env.unwrapped.scene, "_sensors", {}).items():
         data = sensor.data
-        if getattr(data, "dist_est_normalized", None) is None:
+        if getattr(data, attr, None) is None:
             continue
         pixels = getattr(sensor.cfg, "pixel_count", None)
         if pixels is None:
             continue
         pixels = int(pixels)
-        values = data.dist_est_normalized.min(dim=2).values
+        values = getattr(data, attr).min(dim=2).values
         values = values.reshape(values.shape[0], values.shape[1], pixels, pixels)
         for index in range(values.shape[1]):
             sensors.append((f"{_tof_name(name)}_{index}", values[:, index]))
@@ -196,8 +200,10 @@ def _joint_state(env):
 class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
     def __init__(self, env, clip_actions, world_model, mode, data_dir, trajectories_per_cycle,
                  total_trajectories, epochs_per_cycle, replay_cycles, train_encoder, train_dynamics,
-                 inference_frames=1, diag_interval=50):
+                 inference_frames=1, diag_interval=50, sim_future=None, sim_contact=False):
         self.world_model = world_model
+        self.sim_future = sim_future
+        self.sim_contact = sim_contact
         self.mode = mode
         self.epochs_per_cycle = epochs_per_cycle
         self.train_encoder = train_encoder
@@ -219,12 +225,14 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
                 f"Environment has {self.num_actions} actions, world model expects "
                 f"{self.world_model.action_dim}"
             )
+        if self.sim_future is not None:
+            require_future_projectile(self.unwrapped)
         self.frame, self.sensor_names = _tof_frame(self)
         joint_pos, joint_names = _joint_state(self)
         self.features = self._timed_infer(
-            lambda: self.world_model.initialize(
+            lambda: self._with_sim(self.world_model.initialize(
                 self.frame, joint_pos=joint_pos, joint_names=joint_names,
-                sensor_names=self.sensor_names, true_pos=self._true_pos()))
+                sensor_names=self.sensor_names, true_pos=self._true_pos())))
         if mode == "alternating":
             step_dt = getattr(self.unwrapped, "step_dt", None) or (
                 self.unwrapped.cfg.sim.dt * self.unwrapped.cfg.decimation
@@ -242,6 +250,15 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
         if "TRUE_POS" not in self.world_model.raw_signals:
             return None
         return _true_pos_gated(self.unwrapped, "tof_sensor")
+
+    def _with_sim(self, features):
+        if self.sim_future is None:
+            return features
+        frame, names = _tof_frame(self, "future_dist_est_normalized")
+        if names != self.sensor_names:
+            raise RuntimeError("Future ToF sensor ordering does not match the current frame")
+        contact = self.unwrapped._future_projectile_contact if self.sim_contact else None
+        return torch.cat((features, sim_future_features(self.world_model, self.sim_future, frame, contact)), dim=-1)
 
     def _augment(self, observations):
         for key in ("policy", "critic"):
@@ -276,10 +293,10 @@ class WorldModelVecEnvWrapper(RslRlVecEnvWrapper):
         self._step_count += 1
         refresh = self._step_count % self.inference_frames == 0
         joint_pos, joint_names = _joint_state(self)
-        infer = lambda: self.world_model.advance(
+        infer = lambda: self._with_sim(self.world_model.advance(
             self.frame, applied_actions, dones.bool(), refresh=refresh,
             joint_pos=joint_pos, joint_names=joint_names, sensor_names=self.sensor_names,
-            true_pos=self._true_pos())
+            true_pos=self._true_pos()))
         self.features = self._timed_infer(infer) if refresh else infer()
         return self._augment(observations), rewards, dones, extras
 
@@ -420,6 +437,7 @@ def main(env_cfg, agent_cfg):
             resolve_raw_signals(spec=os.environ.get("ABLATION_SENSORS", ""))
         )
     raw_signals = resolve_raw_signals(args_cli.wm_raw_signals)
+    sim_future = args_cli.wm_future_obs_type if args_cli.wm_future_obs_type in SIM_FUTURE_OBS_TYPES else None
     world_model = TOFWorldModel(
         checkpoint=args_cli.wm_checkpoint,
         output_checkpoint=args_cli.wm_output_checkpoint
@@ -436,8 +454,8 @@ def main(env_cfg, agent_cfg):
         contact_threshold=args_cli.wm_contact_threshold,
         context_stride=args_cli.context_stride,
         current_obs_type=args_cli.wm_current_obs_type,
-        future_obs_type=args_cli.wm_future_obs_type,
-        include_contact=args_cli.wm_contact_pred,
+        future_obs_type="none" if sim_future else args_cli.wm_future_obs_type,
+        include_contact=args_cli.wm_contact_pred and not sim_future,
         raw_signals=raw_signals,
         rollout_frame=args_cli.wm_rollout_frame,
     )
@@ -455,11 +473,13 @@ def main(env_cfg, agent_cfg):
         not args_cli.wm_no_train_dynamics,
         args_cli.inference_frames,
         args_cli.wm_diag_interval,
+        sim_future=sim_future,
+        sim_contact=bool(sim_future) and args_cli.wm_contact_pred,
     )
     wm_name = os.path.splitext(os.path.basename(args_cli.wm_checkpoint))[0]
     wm_size = sum(p.numel() for p in world_model.model.parameters())
     print(
-        f"[INFO] Added {world_model.feature_dim} world-model features "
+        f"[INFO] Added {env.features.shape[-1]} world-model features "
         f"(current={args_cli.wm_current_obs_type}, future={args_cli.wm_future_obs_type}, "
         f"rollout_frame={args_cli.wm_rollout_frame}, contact={args_cli.wm_contact_pred})"
     )

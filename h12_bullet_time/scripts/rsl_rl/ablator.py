@@ -1,6 +1,8 @@
 """Ablation study runner for H12 Bullet Time environment."""
 
 import os
+import re
+import select
 import subprocess
 import sys
 import json
@@ -166,7 +168,7 @@ _WM_BOOL_FLAGS = {
 
 def _append_wm_args(cmd: list[str], params: dict) -> None:
     if not params.get("WM_CHECKPOINT"):
-        raise ValueError("WM_CHECKPOINT is required when USE_WORLD_MODEL is True")
+        raise ValueError("WM_CHECKPOINT is required when the checkpoint world model or a SIM-* future is used")
     for key, flag in _WM_VALUE_FLAGS.items():
         val = params.get(key)
         if val is None or val == "":
@@ -231,6 +233,7 @@ def train_and_test(
 ) -> AblationResult:
     """Train and test with given ablation parameters. Returns AblationResult."""
 
+    params = _finalize_params(params)
     env = os.environ.copy()
     for k, v in params.items():
         env[k] = str(v)
@@ -238,7 +241,7 @@ def train_and_test(
     script_dir = Path(__file__).parent
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_name = f"ablation_{run_id}"
-    use_wm = _as_bool(params.get("USE_WORLD_MODEL", False))
+    use_wm = _wm_pipeline(params)
     if "num_envs" in params:
         num_envs = int(params["num_envs"])
     else:
@@ -250,8 +253,8 @@ def train_and_test(
         suffix = f"WM-{_wm_run_suffix(params)}"
         sensor_tag = f"{sensor_tag}-{suffix}" if sensor_tag else suffix
     train_script = "train_wm.py" if use_wm else "train.py"
-    if use_wm and task == "Template-H12-Survive-Time-HYBRID":
-        task = "Template-H12-Survive-Time-WM"
+    if use_wm:
+        task = _wm_task(task, params)
     train_cmd = [
         "python", str(script_dir / train_script),
         "--task", task,
@@ -331,10 +334,58 @@ def train_and_test(
     print(f"[ABLATION] Results: success={result.success}, metrics={metrics}")
     return result
 
-def _wm_task(task: str) -> str:
-    if task == "Template-H12-Survive-Time-HYBRID":
-        return "Template-H12-Survive-Time-WM"
-    return task
+def _wm_task(task: str, params: dict | None = None) -> str:
+    if task != "Template-H12-Survive-Time-HYBRID":
+        return task
+    fut = str((params or {}).get("FUTURE_OBS_TYPE", "")).upper().replace("_", "-")
+    return "Template-H12-Survive-Time-Perfect-WM" if fut.startswith("SIM-") else "Template-H12-Survive-Time-WM"
+
+
+_VIDEO_PROGRESS = re.compile(r"\[VIDEO_PROGRESS\]\s+(\d+)\s+(\d+)")
+
+
+def _stream_recording(proc: subprocess.Popen, timeout: int) -> tuple[int, str]:
+    """Read a recorder's stdout, drawing a video progress bar as [VIDEO_PROGRESS] lines arrive."""
+    deadline = time.monotonic() + timeout
+    kept = []
+    shown = False
+
+    def take(line: str) -> None:
+        nonlocal shown
+        match = _VIDEO_PROGRESS.search(line)
+        if match is None:
+            kept.append(line)
+            return
+        done, total = int(match.group(1)), int(match.group(2))
+        width = 30
+        filled = width * done // max(total, 1)
+        print(
+            f"\r[ABLATION] Video [{'#' * filled}{'.' * (width - filled)}] {done}/{total}",
+            end="",
+            flush=True,
+        )
+        shown = True
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(proc.args, timeout)
+        if proc.poll() is not None:
+            rest = proc.stdout.read() if proc.stdout else ""
+            if rest:
+                for line in rest.splitlines(keepends=True):
+                    take(line)
+            break
+        ready, _, _ = select.select([proc.stdout], [], [], min(1.0, remaining))
+        if not ready:
+            continue
+        line = proc.stdout.readline()
+        if not line:
+            break
+        take(line)
+    if shown:
+        print()
+    return proc.wait(), "".join(kept)
 
 
 def record_wm_video(
@@ -347,6 +398,7 @@ def record_wm_video(
     video_length: int = 300,
     seed: int | None = None,
     timeout: int = 3600,
+    save_observations_images: bool = True,
 ) -> bool:
     """Record a world-model policy video with play_wm_record.py."""
     script_dir = Path(__file__).parent
@@ -356,12 +408,14 @@ def record_wm_video(
             env[k] = str(v)
     video_cmd = [
         "python", str(script_dir / "play_wm_record.py"),
-        "--task", _wm_task(task),
+        "--task", _wm_task(task, params),
         "--checkpoint", log_dir,
         "--num_envs", str(num_envs),
         "--video_length", str(video_length),
         "--video_folder", str(video_folder),
         "--video_name_prefix", run_id,
+        "--out_dir", str(Path(video_folder) / run_id),
+        "--save_observations_images", "true" if save_observations_images else "false",
     ]
     wm_checkpoint = (params or {}).get("WM_CHECKPOINT")
     if wm_checkpoint:
@@ -375,10 +429,10 @@ def record_wm_video(
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
-        stdout, _ = proc.communicate(timeout=timeout)
+        returncode, stdout = _stream_recording(proc, timeout)
         print(stdout)
-        if proc.returncode != 0:
-            print(f"[ABLATION] WM video recording failed with code {proc.returncode}")
+        if returncode != 0:
+            print(f"[ABLATION] WM video recording failed with code {returncode}")
             return False
         print(f"[ABLATION] WM video saved to {video_folder}")
         return True
@@ -428,10 +482,10 @@ def record_video(
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1
         )
-        stdout, _ = proc.communicate(timeout=timeout)
+        returncode, stdout = _stream_recording(proc, timeout)
         print(stdout)
-        if proc.returncode != 0:
-            print(f"[ABLATION] Video recording failed with code {proc.returncode}")
+        if returncode != 0:
+            print(f"[ABLATION] Video recording failed with code {returncode}")
             return False
         print(f"[ABLATION] Video saved to {video_folder}")
         return True
@@ -487,7 +541,7 @@ def load_cached_results(
         return v
     
     for params in combinations:
-        full_params = {**defaults, **params}
+        full_params = _finalize_params({**defaults, **params})
         normalized_full = {k: normalize_value(v) for k, v in full_params.items()}
         
         matched = False
@@ -529,6 +583,51 @@ def load_cached_results(
     return remaining_combinations, cached_results
 
 
+_CHECKPOINT_FUTURES = {"LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "SIM-LATENT"}
+_WRAPPER_FUTURES = {"EMPTY", "NOISE", "REDUNDANT"}
+
+
+def _obs_kind(value) -> str:
+    return str(value or "").strip().upper().replace("_", "-")
+
+
+def _uses_world_model(params: dict) -> bool:
+    """True when the policy observation comes from the checkpoint world model."""
+    current = _obs_kind(params.get("CURRENT_OBS_TYPE"))
+    future = _obs_kind(params.get("FUTURE_OBS_TYPE"))
+    return current == "LATENT" or future in _CHECKPOINT_FUTURES
+
+
+def _wm_pipeline(params: dict) -> bool:
+    """train_wm.py also builds SIM-* and surrogate futures that are not the checkpoint model."""
+    future = _obs_kind(params.get("FUTURE_OBS_TYPE"))
+    return _uses_world_model(params) or future.startswith("SIM-") or future in _WRAPPER_FUTURES
+
+
+def _finalize_params(params: dict) -> dict:
+    params = dict(params)
+    params["USE_WORLD_MODEL"] = _uses_world_model(params)
+    return params
+
+
+def _expand_observation_type(params: dict) -> dict:
+    """Split OBSERVATION_TYPE "<SENSOR>|<CURRENT>|<FUTURE>" into ABLATION_SENSORS, CURRENT_OBS_TYPE, FUTURE_OBS_TYPE.
+
+    Omitted or empty fields keep their grid/DEFAULTS value. Saved results only contain the split keys.
+    """
+    params = dict(params)
+    spec = params.pop("OBSERVATION_TYPE", None)
+    if spec is None:
+        return params
+    parts = [part.strip() for part in str(spec).split("|")]
+    if len(parts) > 3:
+        raise ValueError(f"OBSERVATION_TYPE must be '<SENSOR>|<CURRENT>|<FUTURE>', got {spec!r}")
+    for key, value in zip(("ABLATION_SENSORS", "CURRENT_OBS_TYPE", "FUTURE_OBS_TYPE"), parts):
+        if value:
+            params[key] = value
+    return params
+
+
 def run_ablation_study(
     param_grid: dict[str, list[Any]],
     output_folder: str = "ablation_results",
@@ -536,6 +635,7 @@ def run_ablation_study(
     save_video: bool = False,
     video_num_envs: int = 1,
     video_length: int = 300,
+    save_observations_images: bool = True,
     task: str = "Isaac-H12-Bullet-Time-Hybrid-v0",
     device: str | None = None,
     **kwargs,
@@ -547,9 +647,10 @@ def run_ablation_study(
     _seed_val = param_grid.get("ABLATION_SEED", 42)
     seed = _seed_val[0] if isinstance(_seed_val, list) else _seed_val
 
+    param_grid = {key: value for key, value in param_grid.items() if key != "USE_WORLD_MODEL"}
     keys = list(param_grid.keys())
     values = list(param_grid.values())
-    combinations = [dict(zip(keys, combo)) for combo in product(*values)]
+    combinations = [_expand_observation_type(dict(zip(keys, combo))) for combo in product(*values)]
     
     output_path = Path(output_folder)
     output_file = output_path / f"ablation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -590,6 +691,7 @@ def run_ablation_study(
         elapsed = time.perf_counter() - study_t0
         print(f"\n[{i+1}/{total_to_run}] Running configuration... {_eta_text(i, total_to_run, elapsed)}")
         cfg_t0 = time.perf_counter()
+        full_params = _finalize_params(full_params)
         result = train_and_test(
             full_params, max_train_iters=training_iters, task=task, seed=config_seed, device=device, **kwargs
         )
@@ -597,7 +699,7 @@ def run_ablation_study(
 
         if save_video:
             sensor_tag = str(full_params.get("ABLATION_SENSORS", "")).replace(":", "-").replace(";", "_")
-            if _as_bool(full_params.get("USE_WORLD_MODEL", False)) and result.wm_name and result.train_log_dir:
+            if _wm_pipeline(full_params) and result.wm_name and result.train_log_dir:
                 record_wm_video(
                     task, f"ablation_{i}_{sensor_tag}",
                     str(video_path),
@@ -606,8 +708,9 @@ def run_ablation_study(
                     num_envs=video_num_envs,
                     video_length=video_length,
                     seed=config_seed,
+                    save_observations_images=save_observations_images,
                 )
-            elif not _as_bool(full_params.get("USE_WORLD_MODEL", False)):
+            elif not _wm_pipeline(full_params):
                 record_video(
                     task, f"ablation_{i}_{sensor_tag}",
                     str(video_path),
@@ -669,15 +772,15 @@ DEFAULTS = {
     "ABLATION_SEED": 42,
     "ABLATION_NUM_ENVS": 4096,
     "ABLATION_HIDDEN_DIMS": "32,32",  # shared actor/critic hidden dims, comma-separated
-    "USE_WORLD_MODEL": True,  # False: train.py + eval.py; True: train_wm.py
-    "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S/tof_wm_2000_long.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
+    "USE_WORLD_MODEL": False,  # derived, not a grid option: True for LATENT current or LATENT/DECODED/MIN-DECODED/CLOSEST-POINT/SIM-LATENT future
+    "WM_CHECKPOINT": "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt",  # TOFWM .pt path; required when that derived flag or a SIM-* future is used
     "WM_CONFIG": None,  # YAML for checkpoints that lack an embedded config
     "WM_OUTPUT_CHECKPOINT": None,  # adapted-weight save path; default <checkpoint_stem>_robot.pt
     "WM_MODE": "frozen",  # frozen = infer only; alternating = collect trajectories and retrain
     "WM_CONTACT_THRESHOLD": 0.7,
     "INFERENCE_FRAMES": 2, # Only run inference every N frames
     "CONTEXT_STRIDE": 6, # 3 For 20 hz, 6 For 10 hz trained model
-    "ORACLE_ROLLOUT_FRAMES": 9,  # ORACLE-CP horizon R in frames of CONTEXT_STRIDE steps (match the PWM's R)
+    "ORACLE_ROLLOUT_FRAMES": 9,  # ORACLE-CP / SIM-* horizon R in frames of CONTEXT_STRIDE steps (match the PWM's R)
     "ROLLOUT_FRAME": -1,  # 1-based future frame; 2 is the second prediction. -1 = first contact, else last frame 
     "WM_BATCH_SIZE": 1024,  # WM inference micro-batch size
     "WM_REDUCTION": "flatten",  # mean-pool latent tokens (flatten keeps all tokens)
@@ -694,79 +797,74 @@ DEFAULTS = {
     "WM_TRAIN_ENCODER": False,  # also train the encoder during alternating cycles
     "WM_NO_TRAIN_DYNAMICS": False,  # skip dynamics updates during alternating cycles
     "CURRENT_OBS_TYPE": "LATENT",  # RAW follows ABLATION_SENSORS; WM still encodes the full image. LATENT | NONE
-    "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED (full image) | MIN-DECODED (per-sensor min) | CLOSEST-POINT | NONE | EMPTY | NOISE | REDUNDANT (see REBUTTAL.md)
+    "FUTURE_OBS_TYPE": "LATENT",  # LATENT | DECODED (full image) | MIN-DECODED (per-sensor min) | CLOSEST-POINT | NONE | EMPTY | NOISE | REDUNDANT (see REBUTTAL.md) | SIM-RAW | SIM-MINDIST | SIM-LATENT (Future_Projectile in sim, see README)
     "CONTACT_PRED": False,  # append WM contact-prediction flag to policy observations
 }
 
 if __name__ == "__main__":
-    # ── Sensor shape × signal type study ─────────────────────────────────
+    # OBSERVATION_TYPE "<SENSOR>|<CURRENT>|<FUTURE>" runs only the listed triples (not their product).
+    # Empty fields keep the grid/DEFAULTS value. Results are saved as ABLATION_SENSORS, CURRENT_OBS_TYPE, FUTURE_OBS_TYPE.
+    # USE_WORLD_MODEL is not a grid option. It is saved as True when current is LATENT or future is
+    # LATENT, DECODED, MIN-DECODED, CLOSEST-POINT, or SIM-LATENT, using WM_CHECKPOINT.
     #
-    # ABLATION_SENSORS format: "SHAPE:SIGNAL:MAX_RANGE"
+    # <SENSOR> is "SHAPE:SIGNAL:MAX_RANGE", combined with semicolons: "FIELD:DIST:X;RAY:MINDIST:X"
     #   Shapes:  FIELD, RAY, CONE
     #   Signals: DIST, MINDIST, BIN, MINBIN, TRUE_POS, ORACLE, ORACLE-CP, EVENT
-    #   Combine with semicolons: "FIELD:DIST:4.0;RAY:MINDIST:4.0"
     #   ORACLE = [ball xyz, impact xyz] (6), revealed only while any sensor detects the ball
     #   ORACLE-CP = [ball xyz, target xyz if contact within R else ball xyz at R, contact] (7), same gating
+    # <CURRENT>: RAW (follows the sensor signal; WM still encodes the full image) | LATENT | NONE
+    # <FUTURE>:  LATENT | DECODED (full image) | MIN-DECODED (per-sensor min) | CLOSEST-POINT | NONE
+    #            | EMPTY | NOISE | REDUNDANT (see REBUTTAL.md)
+    #            | SIM-RAW | SIM-MINDIST | SIM-LATENT (Future_Projectile in sim, see README;
+    #              CONTACT_PRED then appends the sim contact flag instead of the PWM's)
     #
     PARAM_GRID = {
         # "ABLATION_SEED": [48, 49],
-        # "ABLATION_SEED": [43, 44,45, 46, 47],
+        # "ABLATION_SEED": [43, 44, 45, 46, 47],
         # "ABLATION_SEED": [43],
-        # "ABLATION_SENSORS": [
-            # ── Single sensor shapes ──────────────────────────────────
-            # Field sensor (spherical detection)
-            # "FIELD:DIST:X",
-            # "FIELD:BIN:X",
-            # "FIELD:EVENT:X",
-            # "FIELD:TRUE_POS:X",
-            # "FIELD:ORACLE:X",
-            # Ray sensor (8x8 grid)
-            # "RAY:DIST:X",
-            # "RAY:MINDIST:X",
-            # "RAY:BIN:X",
-            # "RAY:MINBIN:X",
-            # "RAY:EVENT:X",
-            # "RAY:TRUE_POS:X",
-            # "RAY:ORACLE:X",
-            # Cone sensor (conical receptive field, 30° default)
-            # "CONE:DIST:X",
-            # "CONE:BIN:X",
-            # "CONE:EVENT:X",
-            # "CONE:TRUE_POS:X",
-            # "CONE:ORACLE:X",
+        # "OBSERVATION_TYPE": [
+            # ── Single sensor shapes (RAW|NONE keeps the checkpoint world model off) ──
+            # "FIELD:DIST:X|RAW|NONE",
+            # "FIELD:BIN:X|RAW|NONE",
+            # "FIELD:EVENT:X|RAW|NONE",
+            # "FIELD:TRUE_POS:X|RAW|NONE",
+            # "FIELD:ORACLE:X|RAW|NONE",
+            # "RAY:DIST:X|RAW|NONE",
+            # "RAY:MINDIST:X|RAW|NONE",
+            # "RAY:BIN:X|RAW|NONE",
+            # "RAY:MINBIN:X|RAW|NONE",
+            # "RAY:EVENT:X|RAW|NONE",
+            # "RAY:TRUE_POS:X|RAW|NONE",
+            # "RAY:ORACLE:X|RAW|NONE",
+            # "CONE:DIST:X|RAW|NONE",  # conical receptive field, 30° default
+            # "CONE:BIN:X|RAW|NONE",
+            # "CONE:EVENT:X|RAW|NONE",
+            # "CONE:TRUE_POS:X|RAW|NONE",
+            # "CONE:ORACLE:X|RAW|NONE",
             # ── Sensor combinations ───────────────────────────────────
-            # "FIELD:DIST:X;RAY:DIST:X",
-
-            #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
-            # "FIELD:DIST:X;FIELD:BIN:X",
-            # "RAY:DIST:X;RAY:BIN:X",
-            # "CONE:DIST:X;CONE:BIN:X",
-        # ],
-        # --- Multimodel testing ---
-        # "ABLATION_SENSORS": [
-        #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
-        #   "FIELD:DIST:X;FIELD:BIN:X",
-        #   "RAY:MINDIST:X;RAY:BIN:X",
-        #   "CONE:DIST:X;CONE:BIN:X",
+            # "FIELD:DIST:X;RAY:DIST:X|RAW|NONE",
+            # ── Masked double passing (after the best single-sensor model is known) ──
+            # "FIELD:DIST:X;FIELD:BIN:X|RAW|NONE",
+            # "RAY:DIST:X;RAY:BIN:X|RAW|NONE",
+            # "RAY:MINDIST:X;RAY:BIN:X|RAW|NONE",
+            # "CONE:DIST:X;CONE:BIN:X|RAW|NONE",
         # ],
 
         # "ABLATION_MAX_RANGE": [2.0, 1.0, 0.5, 0.2],
 
-        # Test case
-        # "ABLATION_SENSORS": ["FIELD:EVENT:X;FIELD:MINDIST:X"],
+        # "OBSERVATION_TYPE": ["FIELD:EVENT:X;FIELD:MINDIST:X|RAW|NONE"],
         "ABLATION_MAX_RANGE": [2.0],
 
         # ── World-model inference-speed study ─────────────────────────
-        # "USE_WORLD_MODEL": [True],
         # "ABLATION_NUM_ENVS": [1, 2, 4, 8, 16],
         # "WM_CHECKPOINT": [
-        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/tof_wm_2000.pt",
-        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S-e8/tof_wm.pt"
-        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S-e16/tof_wm.pt"
-        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/ToFWM-S-e8/tof_wm.pt"
-        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c5r12/ToFWM-S-e8/tof_wm.pt"
-        #     # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000enc-p12000dyn/ToFWM-S-e32/tof_wm.pt"
-            # "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        #     # "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/tof_wm_2000.pt",
+        #     # "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/ToFWM-S-e8/tof_wm.pt"
+        #     # "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/ToFWM-S-e16/tof_wm.pt"
+        #     # "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c3r9/ToFWM-S-e8/tof_wm.pt"
+        #     # "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c5r12/ToFWM-S-e8/tof_wm.pt"
+        #     # "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c3r9/p6000enc-p12000dyn/ToFWM-S-e32/tof_wm.pt"
+            # "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
         # ],
         # "WM_CONFIG": [None],
         # "WM_OUTPUT_CHECKPOINT": [None],
@@ -787,84 +885,76 @@ if __name__ == "__main__":
         # "WM_NO_AMP": [False],
         # "WM_TRAIN_ENCODER": [False],
         # "WM_NO_TRAIN_DYNAMICS": [False],
-        # RAW uses the sensor vector (MINDIST -> one distance per sensor). The WM still gets the full image.
-        # DECODED is the full decoded image. MIN-DECODED mins that image to one distance per sensor.
-        # "CURRENT_OBS_TYPE": ["RAW", "LATENT", "NONE"],
-        # "CURRENT_OBS_TYPE": ["LATENT"],
-        # "FUTURE_OBS_TYPE": ["LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "NONE"],
-        # "FUTURE_OBS_TYPE": ["LATENT", "NONE"],
+        # "OBSERVATION_TYPE": [
+        #     "RAY:DIST:X|RAW|LATENT", "RAY:DIST:X|LATENT|LATENT", "RAY:DIST:X|NONE|LATENT",
+        #     "RAY:DIST:X|LATENT|DECODED", "RAY:DIST:X|LATENT|MIN-DECODED",
+        #     "RAY:DIST:X|LATENT|CLOSEST-POINT", "RAY:DIST:X|LATENT|NONE",
+        #     "RAY:DIST:X|RAW|SIM-RAW", "RAY:MINDIST:X|RAW|SIM-MINDIST", "RAY:DIST:X|LATENT|SIM-LATENT",
+        # ],
         # "CONTACT_PRED": [True],
         # "WM_PRECISION": ["fp16", "bf16"],
 
         ####### Oracle Model size study #######
-        # "ABLATION_SENSORS": ["RAY:ORACLE:X"],
-        # "CURRENT_OBS_TYPE": ["RAW"],
-        # "USE_WORLD_MODEL": [False],
+        # "OBSERVATION_TYPE": ["RAY:ORACLE:X|RAW|NONE"],
 
         ####### Min Dist WM Study #######
         # "ABLATION_SEED": [43, 44, 45, 46, 47],
         # "ABLATION_HIDDEN_DIMS": ["512,512", "128,128"],
-        # "ABLATION_SENSORS": ["RAY:MINDIST:X"],
-        # "CURRENT_OBS_TYPE": ["RAW"],
-        # "FUTURE_OBS_TYPE": ["MIN-DECODED"],
-        # "USE_WORLD_MODEL": [True],
+        # "OBSERVATION_TYPE": ["RAY:MINDIST:X|RAW|MIN-DECODED"],
         # "WM_CHECKPOINT": [
-        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        #     "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
         # ],
         # "CONTACT_PRED": [True],
 
         # ####### Latent Future WM Study #######
         # "ABLATION_SEED": [43, 44, 45, 46, 47],
         # "ABLATION_HIDDEN_DIMS": ["32,32", "512,512", "128,128"],
-        # "ABLATION_SENSORS": ["RAY:DIST:X"],
-        # "CURRENT_OBS_TYPE": ["LATENT"],
-        # "FUTURE_OBS_TYPE": ["LATENT"],
-        # "USE_WORLD_MODEL": [True],
+        # "OBSERVATION_TYPE": ["RAY:DIST:X|LATENT|LATENT"],
         # "WM_CHECKPOINT": [
-        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        #     "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
         # ],
         # "CONTACT_PRED": [True],
 
         # ###### f_psi WM Study #######
         # "ABLATION_SEED": [43, 44, 45, 46, 47],
         # "ABLATION_HIDDEN_DIMS": ["512,512", "128,128"],
-        # "ABLATION_SENSORS": ["RAY:DIST:X"],
-        # "CURRENT_OBS_TYPE": ["LATENT"],
-        # "FUTURE_OBS_TYPE": ["NONE"],
-        # "USE_WORLD_MODEL": [True],
+        # "OBSERVATION_TYPE": ["RAY:DIST:X|LATENT|NONE"],
         # "WM_CHECKPOINT": [
-        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        #     "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
         # ],
         # "CONTACT_PRED": [False],
 
         ###### f_psi WM Study #######
-        "ABLATION_SEED": [45, 48, 49, 50, 51, 52],
+        # "ABLATION_SEED": [45, 48, 49, 50, 51, 52],
+        # "ABLATION_HIDDEN_DIMS": ["32,32"],
+        # "OBSERVATION_TYPE": ["RAY:DIST:X|LATENT|NONE"],
+        # "WM_CHECKPOINT": [
+        #     "/home/carson/GenTact/humanoid_contact_anticipation/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        # ],
+        # "CONTACT_PRED": [False],
+
+        ###### Perfect WM (sim future) Study #######
+        # "ABLATION_SEED": [43, 44, 45, 46, 47],
+        "ABLATION_SEED": [43],
         "ABLATION_HIDDEN_DIMS": ["32,32"],
-        "ABLATION_SENSORS": ["RAY:DIST:X"],
-        "CURRENT_OBS_TYPE": ["LATENT"],
-        "FUTURE_OBS_TYPE": ["NONE"],
-        "USE_WORLD_MODEL": [True],
-        "WM_CHECKPOINT": [
-            "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
-        ],
-        "CONTACT_PRED": [False],
+        "OBSERVATION_TYPE": ["RAY:DIST:X|RAW|SIM-RAW", "RAY:MINDIST:X|RAW|SIM-MINDIST", "RAY:DIST:X|LATENT|SIM-LATENT"],
+        "CONTACT_PRED": [True],
 
         # #### ORACLE-CP Study ####
         # "ABLATION_SEED": [43, 44, 45, 46, 47],
         # "ABLATION_HIDDEN_DIMS": ["32,32", "512,512", "128,128"],
-        # "ABLATION_SENSORS": ["RAY:ORACLE-CP:X"],
-        # "CURRENT_OBS_TYPE": ["RAW"],
-        # "USE_WORLD_MODEL": [False],
+        # "OBSERVATION_TYPE": ["RAY:ORACLE-CP:X|RAW|NONE"],
     }
     
     run_ablation_study(
         param_grid=PARAM_GRID,
         num_envs=4096,
-        training_iters=3000,
+        training_iters=3,
         headless=True,
         task="Template-H12-Survive-Time-HYBRID",
         verbose=False,
-        save_video=False,
-        video_length=1000,
+        save_video=True,
+        video_length=300,
+        save_observations_images=False,
         device="cuda:0",
     )

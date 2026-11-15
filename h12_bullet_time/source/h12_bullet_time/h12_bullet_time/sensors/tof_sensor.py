@@ -387,6 +387,11 @@ class TofSensor(SensorBase):
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), self.cfg.pixel_count**2,
             dtype=torch.float32, device=self._device
         )
+        self._data.future_dist_est = torch.full(
+            (self._num_envs, self._num_sensors, 1, self.cfg.pixel_count**2), self.cfg.max_range,
+            dtype=torch.float32, device=self._device
+        )
+        self._data.future_dist_est_normalized = torch.ones_like(self._data.future_dist_est)
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
         """Fills the buffers of the sensor data."""
@@ -456,6 +461,37 @@ class TofSensor(SensorBase):
             1, self._num_sensors, 1, 3
         )
         raw_target_distances = torch.linalg.norm(target_pos_sensor, dim=-1) - self.cfg.projectile_radius
+        dist_est = self._ray_dist_est(target_pos_sensor)
+        dist_est_normalized = dist_est / self.cfg.max_range
+        dist_est_change_normalized = dist_est_normalized - self._last_dist_est_normalized
+        binary_detection = (dist_est < self.cfg.max_range).float()
+
+        self._data.source_pos_w[:] = source_pos_w.view(-1, 3)
+        self._data.source_quat_w[:] = source_quat_w.view(-1, 4)
+        self._data.target_pos_w[:] = target_pos_w.view(-1, total_num_frames, 3)
+        self._data.target_quat_w[:] = target_quat_w.view(-1, total_num_frames, 4)
+        self._data.target_pos_source[:] = target_pos_source.view(-1, total_num_frames, 3)
+        self._data.target_quat_source[:] = target_quat_source.view(-1, total_num_frames, 4)
+        self._data.raw_target_distances[:] = raw_target_distances
+        self._data.target_pos_sensor[:] = target_pos_sensor
+        self._data.dist_est[:] = dist_est
+        self._data.dist_est_normalized[:] = dist_est_normalized
+        self._data.dist_est_change_normalized[:] = dist_est_change_normalized
+        self._data.binary_detection[:] = binary_detection
+        self._last_dist_est_normalized[:] = dist_est_normalized
+
+    def update_future(self, future_pos_w: torch.Tensor):
+        """Fill ``future_dist_est(_normalized)`` with the projectile placed at ``future_pos_w`` (N, 3)."""
+        data = self.data
+        pos_source, _ = subtract_frame_transforms(data.source_pos_w, data.source_quat_w, future_pos_w)
+        target_pos_sensor = pos_source[:, None, None] - self._relative_sensor_pos.view(1, self._num_sensors, 1, 3)
+        dist_est = self._ray_dist_est(target_pos_sensor)
+        self._data.future_dist_est[:] = dist_est
+        self._data.future_dist_est_normalized[:] = dist_est / self.cfg.max_range
+
+    def _ray_dist_est(self, target_pos_sensor: torch.Tensor) -> torch.Tensor:
+        """Per-pixel ToF distances (N, S, M, P) for spheres at ``target_pos_sensor`` (N, S, M, 3)."""
+        raw_target_distances = torch.linalg.norm(target_pos_sensor, dim=-1) - self.cfg.projectile_radius
 
         ############### TOF simulation ###############
         # Multi-pixel ToF: each sensor has a pixel_count x pixel_count grid of rays
@@ -496,31 +532,11 @@ class TofSensor(SensorBase):
         within_range = raw_target_distances.unsqueeze(-1) <= self.cfg.max_range
         
         # ToF distance per pixel: (N, S, M, P)
-        dist_est = torch.where(
+        return torch.where(
             in_front & within_fov & within_range,
             final_distances,
             torch.full_like(final_distances, self.cfg.max_range)
         )
-
-        dist_est_normalized = dist_est / self.cfg.max_range
-        dist_est_change_normalized = dist_est_normalized - self._last_dist_est_normalized
-        binary_detection = (dist_est < self.cfg.max_range).float()
-
-        ######################################################
-
-        self._data.source_pos_w[:] = source_pos_w.view(-1, 3)
-        self._data.source_quat_w[:] = source_quat_w.view(-1, 4)
-        self._data.target_pos_w[:] = target_pos_w.view(-1, total_num_frames, 3)
-        self._data.target_quat_w[:] = target_quat_w.view(-1, total_num_frames, 4)
-        self._data.target_pos_source[:] = target_pos_source.view(-1, total_num_frames, 3)
-        self._data.target_quat_source[:] = target_quat_source.view(-1, total_num_frames, 4)
-        self._data.raw_target_distances[:] = raw_target_distances
-        self._data.target_pos_sensor[:] = target_pos_sensor
-        self._data.dist_est[:] = dist_est
-        self._data.dist_est_normalized[:] = dist_est_normalized
-        self._data.dist_est_change_normalized[:] = dist_est_change_normalized
-        self._data.binary_detection[:] = binary_detection
-        self._last_dist_est_normalized[:] = dist_est_normalized
 
     def make_grid(self):
         """Create quaternions representing ray directions for each pixel in the sensor grid.

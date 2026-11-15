@@ -99,3 +99,12 @@ class CapacitiveSensorData:
 
     binary_detection: torch.Tensor = None
     """Binary detection: 1.0 if within max_range, 0.0 otherwise. Shape: (N, S, M)."""
+
+    future_dist_est: torch.Tensor = None
+    """:attr:`dist_est` with the projectile placed at the Future_Projectile pose. Shape: (N, S, 1).
+
+    Only filled when :meth:`CapacitiveSensor.update_future` is called (perfect-WM environment); max_range otherwise.
+    """
+
+    future_dist_est_normalized: torch.Tensor = None
+    """:attr:`future_dist_est` divided by max_range. Shape: (N, S, 1)."""

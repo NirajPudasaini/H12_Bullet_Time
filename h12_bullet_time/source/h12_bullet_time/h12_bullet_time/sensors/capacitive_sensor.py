@@ -388,6 +388,10 @@ class CapacitiveSensor(SensorBase):
         self._data.binary_detection = torch.zeros(
             self._num_envs, self._num_sensors, len(duplicate_frame_indices), device=self._device
         )
+        self._data.future_dist_est = torch.full(
+            (self._num_envs, self._num_sensors, 1), self.cfg.max_range, device=self._device
+        )
+        self._data.future_dist_est_normalized = torch.ones_like(self._data.future_dist_est)
 
     def _update_buffers_impl(self, env_ids: Sequence[int]):
         """Fills the buffers of the sensor data."""
@@ -457,7 +461,7 @@ class CapacitiveSensor(SensorBase):
 
         # Extremely basic and non-realistic linear sensor: Just used for debugging.
         capacitance_values = torch.clamp(-(1/self.cfg.max_range) * raw_target_distances + 1, min=0.0) * self.cfg.max_SNR
-        dist_est = torch.where(raw_target_distances <= self.cfg.max_range, raw_target_distances, torch.ones_like(raw_target_distances) * self.cfg.max_range)
+        dist_est = self._field_dist_est(raw_target_distances)
         dist_est_normalized = dist_est / self.cfg.max_range
         dist_est_change_normalized = dist_est_normalized - self._last_dist_est_normalized
         self._last_dist_est_normalized = dist_est_normalized
@@ -481,6 +485,18 @@ class CapacitiveSensor(SensorBase):
         self._data.dist_est_change_normalized[:] = dist_est_change_normalized
         self._data.binary_detection[:] = binary_detection
         self._last_dist_est_normalized[:] = dist_est_normalized
+
+    def update_future(self, future_pos_w: torch.Tensor):
+        """Fill ``future_dist_est(_normalized)`` with the projectile placed at ``future_pos_w`` (N, 3)."""
+        data = self.data
+        pos_source, _ = subtract_frame_transforms(data.source_pos_w, data.source_quat_w, future_pos_w)
+        target_pos_sensor = pos_source[:, None, None] - self._relative_sensor_pos.view(1, self._num_sensors, 1, 3)
+        dist_est = self._field_dist_est(torch.linalg.norm(target_pos_sensor, dim=-1) - self.cfg.projectile_radius)
+        self._data.future_dist_est[:] = dist_est
+        self._data.future_dist_est_normalized[:] = dist_est / self.cfg.max_range
+
+    def _field_dist_est(self, raw_target_distances: torch.Tensor) -> torch.Tensor:
+        return torch.where(raw_target_distances <= self.cfg.max_range, raw_target_distances, torch.ones_like(raw_target_distances) * self.cfg.max_range)
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # set visibility of markers

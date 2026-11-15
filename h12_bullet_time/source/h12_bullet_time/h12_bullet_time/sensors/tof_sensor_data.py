@@ -92,3 +92,12 @@ class TofSensorData:
 
     binary_detection: torch.Tensor = None
     """Binary detection per pixel: 1.0 if detected, 0.0 otherwise. Shape: (N, S, M, P)."""
+
+    future_dist_est: torch.Tensor = None
+    """:attr:`dist_est` with the projectile placed at the Future_Projectile pose. Shape: (N, S, 1, P).
+
+    Only filled when :meth:`TofSensor.update_future` is called (perfect-WM environment); max_range otherwise.
+    """
+
+    future_dist_est_normalized: torch.Tensor = None
+    """:attr:`future_dist_est` divided by max_range. Shape: (N, S, 1, P)."""

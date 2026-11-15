@@ -33,6 +33,12 @@ parser.add_argument("--video_length", type=int, default=300)
 parser.add_argument("--video_folder", type=str, default=None)
 parser.add_argument("--video_name_prefix", type=str, default="wm-record")
 parser.add_argument("--out_dir", type=str, default=None, help="Figure + diagnostics dir (default: video folder).")
+parser.add_argument(
+    "--save_observations_images",
+    type=lambda value: str(value).lower() in ("1", "true", "yes"),
+    default=True,
+    help="Write wm_observations.png and wm_rollout.png.",
+)
 parser.add_argument("--wm_checkpoint", type=str, default=None, help="Defaults to the run's params/world_model.yaml.")
 parser.add_argument("--wm_config", type=str, default=None)
 parser.add_argument("--wm_contact_threshold", type=float, default=None, help="Defaults to the run log.")
@@ -81,6 +87,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import isaaclab_tasks  # noqa: F401
 import h12_bullet_time.tasks  # noqa: F401
 from h12_bullet_time.sensors import TofSensor
+from sim_future import SIM_FUTURE_OBS_TYPES, require_future_projectile, sim_future_features
 
 try:
     from trybrid_skin import TOFWorldModel, resolve_raw_signals
@@ -110,13 +117,13 @@ def _env0_in_contact(env) -> bool:
     return False
 
 
-def _tof_frame(env):
+def _tof_frame(env, attr="dist_est_normalized"):
     sensors = []
     for name, sensor in env.unwrapped.scene._sensors.items():
         if not isinstance(sensor, TofSensor):
             continue
         pixels = int(sensor.cfg.pixel_count)
-        values = sensor.data.dist_est_normalized.min(dim=2).values
+        values = getattr(sensor.data, attr).min(dim=2).values
         values = values.reshape(values.shape[0], values.shape[1], pixels, pixels)
         for index in range(values.shape[1]):
             sensors.append((f"{name}_{index}", values[:, index]))
@@ -128,23 +135,37 @@ def _tof_frame(env):
 
 
 class WMRecordVecEnv(RslRlVecEnvWrapper):
-    def __init__(self, env, clip_actions, world_model, inference_frames):
+    def __init__(self, env, clip_actions, world_model, inference_frames, sim_future=None, sim_contact=False):
         self.world_model = world_model
         self.inference_frames = int(inference_frames)
+        self.sim_future = sim_future
+        self.sim_contact = sim_contact
+        self.sim_frame = None
         self.step_count = 0
         self.last_refreshed = True
         super().__init__(env, clip_actions=clip_actions)
         if self.num_actions != world_model.action_dim:
             raise ValueError(f"Env has {self.num_actions} actions, WM expects {world_model.action_dim}")
+        if self.sim_future is not None:
+            require_future_projectile(self.unwrapped)
         self.frame, self.sensor_names = _tof_frame(self)
         self.base_obs_dim = super().get_observations()["policy"].shape[-1]
         robot = self.unwrapped.scene["robot"]
-        self.features = world_model.initialize(
+        self.features = self._with_sim(world_model.initialize(
             self.frame, joint_pos=robot.data.joint_pos, joint_names=list(robot.joint_names),
-            sensor_names=self.sensor_names)
-        self.aug_obs_dim = self.base_obs_dim + world_model.feature_dim
+            sensor_names=self.sensor_names))
+        self.aug_obs_dim = self.base_obs_dim + self.features.shape[-1]
         self.contact_frame = None
         self._install_contact_snapshot()
+
+    def _with_sim(self, features):
+        if self.sim_future is None:
+            return features
+        self.sim_frame, names = _tof_frame(self, "future_dist_est_normalized")
+        if names != self.sensor_names:
+            raise RuntimeError("Future ToF sensor ordering does not match the current frame")
+        contact = self.unwrapped._future_projectile_contact if self.sim_contact else None
+        return torch.cat((features, sim_future_features(self.world_model, self.sim_future, self.sim_frame, contact)), -1)
 
     def _install_contact_snapshot(self):
         """Save env 0's ToF image at a contact reset, before the scene reset clears it."""
@@ -179,10 +200,10 @@ class WMRecordVecEnv(RslRlVecEnvWrapper):
         self.step_count += 1
         self.last_refreshed = self.step_count % self.inference_frames == 0
         robot = self.unwrapped.scene["robot"]
-        self.features = self.world_model.advance(
+        self.features = self._with_sim(self.world_model.advance(
             self.frame, applied, dones.bool(), refresh=self.last_refreshed,
             joint_pos=robot.data.joint_pos, joint_names=list(robot.joint_names),
-            sensor_names=self.sensor_names)
+            sensor_names=self.sensor_names))
         return self._augment(observations), rewards, dones, extras
 
 
@@ -489,6 +510,7 @@ def main(env_cfg, agent_cfg):
         name_prefix=args_cli.video_name_prefix,
     )
 
+    sim_future = args_cli.wm_future_obs_type if args_cli.wm_future_obs_type in SIM_FUTURE_OBS_TYPES else None
     world_model = TOFWorldModel(
         checkpoint=args_cli.wm_checkpoint,
         config=args_cli.wm_config,
@@ -503,15 +525,18 @@ def main(env_cfg, agent_cfg):
         contact_threshold=args_cli.wm_contact_threshold,
         context_stride=args_cli.context_stride,
         current_obs_type=args_cli.wm_current_obs_type,
-        future_obs_type=args_cli.wm_future_obs_type,
-        include_contact=args_cli.wm_contact_pred,
+        future_obs_type="none" if sim_future else args_cli.wm_future_obs_type,
+        include_contact=args_cli.wm_contact_pred and not sim_future,
         raw_signals=resolve_raw_signals(args_cli.wm_raw_signals),
         rollout_frame=args_cli.wm_rollout_frame,
     )
-    env = WMRecordVecEnv(env, agent_cfg.clip_actions, world_model, args_cli.inference_frames)
-    print(f"[WM_VERIFY] base_obs_dim={env.base_obs_dim} wm_feature_dim={world_model.feature_dim} "
+    env = WMRecordVecEnv(
+        env, agent_cfg.clip_actions, world_model, args_cli.inference_frames,
+        sim_future=sim_future, sim_contact=bool(sim_future) and args_cli.wm_contact_pred,
+    )
+    print(f"[WM_VERIFY] base_obs_dim={env.base_obs_dim} wm_feature_dim={env.features.shape[-1]} "
           f"aug_obs_dim={env.aug_obs_dim} (policy sees base + WM)")
-    assert env.aug_obs_dim == env.base_obs_dim + world_model.feature_dim
+    assert env.get_observations()["policy"].shape[-1] == env.aug_obs_dim
 
     if agent_cfg.class_name == "OnPolicyRunner":
         runner_cls = OnPolicyRunner
@@ -531,6 +556,9 @@ def main(env_cfg, agent_cfg):
     record_future = world_model.future_latent is not None
     record_rollout = world_model.future_rollout is not None
     record_contact = world_model.include_contact and world_model.contact_flag is not None
+    record_sim = sim_future is not None
+    sim_frames = [] if record_sim else None
+    sim_flags = [] if env.sim_contact else None
     print(f"[WM_VERIFY] spatial_shape={tuple(spatial_shape)} rollout_frames={world_model.rollout_frames} "
           f"context_frames={world_model.context_frames} threshold={world_model.contact_threshold} "
           f"future={record_future} contact={record_contact}")
@@ -544,7 +572,8 @@ def main(env_cfg, agent_cfg):
     feat_norms, infer_ms = [], []
     env.contact_frame = None
     obs = env.get_observations()
-    for _ in range(args_cli.video_length):
+    save_images = bool(args_cli.save_observations_images)
+    for step in range(args_cli.video_length):
         if not simulation_app.is_running():
             break
         with torch.inference_mode():
@@ -565,27 +594,42 @@ def main(env_cfg, agent_cfg):
             if record_contact:
                 flags.append(float(world_model.contact_flag[0, 0].float().cpu()))
                 probed.append(_to_numpy(world_model.contact_probabilities[0]))
-            if record_rollout:
+            if record_rollout and save_images:
                 rollouts.append(_to_numpy(world_model.future_rollout[0]))
+            if record_sim and save_images:
+                sim_frames.append(env.sim_frame[0].float().cpu())
+            if sim_flags is not None:
+                sim_flags.append(float(env.unwrapped._future_projectile_contact[0]))
+        print(f"[VIDEO_PROGRESS] {step + 1} {args_cli.video_length}", flush=True)
 
     T = len(current)
     current = np.stack(current)
-    cur_dec = _decode_latents(world_model, current, spatial_shape)
-    cur_stitched = _stitch_sensor_grid(cur_dec)
+    cur_dec = None
     fut_stitched = None
     if record_future:
         future = np.stack(future)
-        fut_stitched = _stitch_sensor_grid(_decode_latents(world_model, future, spatial_shape))
-    if record_contact:
+    if sim_flags is not None:
+        flags = sim_flags
+    if flags is not None:
         flags = np.asarray(flags, dtype=np.float32)
+    if record_contact:
         probed = np.stack(probed)
-    contact_stitched = _stitch_sensor_grid(torch.stack(contact_frames)) if contact_frames else None
-    true_contact = _hold_contact_frames(contact_stitched, contact_steps, dones, cur_stitched.shape)
-    figure_path = out_dir / "wm_observations.png"
-    _save_obs_figure(cur_stitched, figure_path, fut_stitched, flags, true_contact)
-    files = ["wm_observations.png"]
+    figure_path = None
     roll_path = None
-    if record_rollout:
+    files = []
+    if save_images:
+        cur_dec = _decode_latents(world_model, current, spatial_shape)
+        cur_stitched = _stitch_sensor_grid(cur_dec)
+        if record_future:
+            fut_stitched = _stitch_sensor_grid(_decode_latents(world_model, future, spatial_shape))
+        if record_sim:
+            fut_stitched = _stitch_sensor_grid(torch.stack(sim_frames))
+        contact_stitched = _stitch_sensor_grid(torch.stack(contact_frames)) if contact_frames else None
+        true_contact = _hold_contact_frames(contact_stitched, contact_steps, dones, cur_stitched.shape)
+        figure_path = out_dir / "wm_observations.png"
+        _save_obs_figure(cur_stitched, figure_path, fut_stitched, flags, true_contact)
+        files = ["wm_observations.png"]
+    if save_images and record_rollout:
         roll = np.stack(rollouts)
         T_roll, R, tpf, e_dim = roll.shape
         roll_dec = _decode_latents(world_model, roll.reshape(T_roll * R, tpf, e_dim), spatial_shape)
@@ -604,7 +648,7 @@ def main(env_cfg, agent_cfg):
         "task": args_cli.task,
         "steps": T,
         "base_obs_dim": env.base_obs_dim,
-        "wm_feature_dim": world_model.feature_dim,
+        "wm_feature_dim": env.features.shape[-1],
         "aug_obs_dim": env.aug_obs_dim,
         "tokens_per_frame": world_model.model.dynamics.tokens_per_frame,
         "embedding_dim": world_model.model.dynamics.e_dim,
@@ -617,15 +661,15 @@ def main(env_cfg, agent_cfg):
         "inference_frames": args_cli.inference_frames,
         "context_stride": world_model.context_stride,
         "stochastic": bool(args_cli.wm_stochastic),
-        "include_contact": bool(world_model.include_contact),
-        "future_obs_type": world_model.future_obs_type,
-        "contact_flag_rate": float((flags >= 0.5).mean()) if record_contact and T else None,
+        "include_contact": bool(world_model.include_contact or env.sim_contact),
+        "future_obs_type": args_cli.wm_future_obs_type,
+        "contact_flag_rate": float((flags >= 0.5).mean()) if flags is not None and T else None,
         "refresh_rate": float(np.mean(refreshed)) if T else 0.0,
         "mean_future_norm": float(np.mean(feat_norms)) if record_future and T else None,
         "std_future_norm": float(np.std(feat_norms)) if record_future and T else None,
         "std_current_latent": current_std,
         "mean_current_future_dist": cur_fut_dist,
-        "decoded_shape": list(cur_dec.shape),
+        "decoded_shape": None if cur_dec is None else list(cur_dec.shape),
         "video_folder": str(video_folder),
         "files": files,
     }
@@ -652,8 +696,12 @@ def main(env_cfg, agent_cfg):
     else:
         varying = current_std > 0
         detail = "current WM latents vary over time" if varying else "current WM latents look static"
-    figure_list = str(figure_path) if roll_path is None else f"{figure_path}, {roll_path}"
-    print(f"[WM_VERIFY] {'PASS' if varying else 'FAIL'}: {detail}. Video: {video_folder} figures: {figure_list}")
+    if save_images:
+        figure_list = str(figure_path) if roll_path is None else f"{figure_path}, {roll_path}"
+        figure_text = f" figures: {figure_list}"
+    else:
+        figure_text = " (observation images skipped)"
+    print(f"[WM_VERIFY] {'PASS' if varying else 'FAIL'}: {detail}. Video: {video_folder}{figure_text}")
     env.close()
 
 

@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import torch
 from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab.utils.math import quat_apply_inverse
+from isaaclab.utils.math import matrix_from_quat
 
 from isaaclab.envs.mdp import (
     base_ang_vel,
@@ -20,7 +20,7 @@ from isaaclab.envs.mdp import (
 __all__ = [
     "base_ang_vel", "joint_pos_rel", "joint_vel_rel", "projected_gravity", "last_action",
     "sensor_obs", "sensor_obs_all",
-    "tof_distances_obs",
+    "tof_distances_obs", "future_projectile",
     "projectile_position_relative", "projectile_velocity", "projectile_distance_obs",
 ]
 
@@ -162,17 +162,62 @@ def _robot_collision_parts(env: ManagerBasedRLEnv, num_points: int = 1024):
     return _COLLISION_PARTS["parts"]
 
 
-def _robot_occupies(env: ManagerBasedRLEnv, centers_w: torch.Tensor, radius: float) -> torch.Tensor:
-    """(num_envs,) bool: robot collision geometry intersects the sphere (centers_w, radius)."""
+def _robot_occupies(env: ManagerBasedRLEnv, centers_w: torch.Tensor, radius: float, chunk: int = 8192) -> torch.Tensor:
+    """Robot collision geometry intersects the sphere (centers_w, radius).
+
+    centers_w (N, 3) -> (N,) bool, or (N, K, 3) -> (N, K) bool.
+    """
     body_idx, points, bound_center, bound_radius = _robot_collision_parts(env)
     data = env.scene["robot"].data
-    local = quat_apply_inverse(data.body_quat_w[:, body_idx], centers_w[:, None] - data.body_pos_w[:, body_idx])
-    env_ids, part_ids = ((local - bound_center).norm(dim=-1) < bound_radius + radius).nonzero(as_tuple=True)
-    # Surface-only test: valid because every H1-2 link is thinner than the ball diameter.
-    hit = (points[part_ids] - local[env_ids, part_ids, None]).norm(dim=-1).amin(1) < radius
-    occupied = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-    occupied[env_ids[hit]] = True
-    return occupied
+    centers = centers_w if centers_w.dim() == 3 else centers_w[:, None]
+    rot = matrix_from_quat(data.body_quat_w[:, body_idx])
+    local = torch.einsum("nlji,nklj->nkli", rot, centers[:, :, None] - data.body_pos_w[:, None, body_idx])
+    env_ids, k_ids, part_ids = ((local - bound_center).norm(dim=-1) < bound_radius + radius).nonzero(as_tuple=True)
+    occupied = torch.zeros(centers.shape[:2], dtype=torch.bool, device=env.device)
+    for s in range(0, len(env_ids), chunk):
+        e, k, p = env_ids[s : s + chunk], k_ids[s : s + chunk], part_ids[s : s + chunk]
+        # Surface-only test: valid because every H1-2 link is thinner than the ball diameter.
+        hit = (points[p] - local[e, k, p, None]).norm(dim=-1).amin(1) < radius
+        occupied[e[hit], k[hit]] = True
+    return occupied if centers_w.dim() == 3 else occupied[:, 0]
+
+
+def future_projectile(env: ManagerBasedRLEnv, asset_name: str = "Future_Projectile") -> torch.Tensor:
+    """Place Future_Projectile one frame before the projectile would occupy the robot, then refresh sensor futures.
+
+    The projectile is propagated ballistically, matching PhysX's semi-implicit Euler (the extra
+    0.5 * g * t * physics_dt term), with z clamped at the ground, in frames of CONTEXT_STRIDE control
+    steps for up to R = ORACLE_ROLLOUT_FRAMES frames, with the robot held at its current pose. Occupancy is
+    swept at every control step so the ball cannot tunnel through thin links between frames. Without contact
+    the ball is placed at frame R. Results are stored on ``env._future_projectile_{pos_w,contact,frame}`` and
+    pushed to every sensor exposing ``update_future``. Returns an empty (num_envs, 0) observation.
+    """
+    ball = env.scene["Projectile"]
+    pos, vel = ball.data.root_pos_w, ball.data.root_lin_vel_w
+    radius = float(ball.cfg.spawn.radius)
+    g = torch.tensor(env.cfg.sim.gravity, dtype=pos.dtype, device=env.device)
+    stride = int(os.environ.get("CONTEXT_STRIDE", 6))
+    frames = int(os.environ.get("ORACLE_ROLLOUT_FRAMES", 9))
+    t = torch.arange(frames * stride + 1, dtype=pos.dtype, device=env.device)[:, None] * env.step_dt
+    path = pos[:, None] + vel[:, None] * t + 0.5 * g * t * (t + env.physics_dt)
+    path[..., 2] = path[..., 2].clamp(min=radius)
+    hit = _robot_occupies(env, path[:, 1:], radius)
+    contact = hit.any(dim=1)
+    frame = torch.where(contact, hit.int().argmax(dim=1) // stride, frames)
+    future = path[torch.arange(env.num_envs, device=env.device), frame * stride]
+    env._future_projectile_pos_w, env._future_projectile_contact, env._future_projectile_frame = future, contact, frame
+    if asset_name in env.scene.rigid_objects:
+        quat = torch.zeros(env.num_envs, 4, device=env.device)
+        quat[:, 0] = 1.0
+        env.scene[asset_name].write_root_pose_to_sim(torch.cat([future, quat], dim=-1))
+        # The physics render happens before observations, and a video frame is captured from that
+        # render when cameras are enabled. Render again so the frame shows this pose.
+        if env.render_mode == "rgb_array":
+            env.sim.render()
+    for sensor in env.scene.sensors.values():
+        if hasattr(sensor, "update_future"):
+            sensor.update_future(future)
+    return torch.zeros((env.num_envs, 0), device=env.device)
 
 
 def _oracle_cp_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:

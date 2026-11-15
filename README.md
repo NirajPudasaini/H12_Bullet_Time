@@ -126,3 +126,51 @@ python scripts/rsl_rl/play_wm_record.py --task Template-H12-Survive-Time-WM --vi
 The script launches headless with cameras enabled so `RecordVideo` can capture `rgb_array` frames.
 World-model observations are saved as `wm_observations.png` (current / selected future / contact)
 and `wm_rollout.png` (all R predicted steps stacked above current). Both are timestamp-aligned.
+
+## Perfect World Model (simulated future projectile)
+
+The SIM-* future observations swap the PWM's learned dynamics for the true ball dynamics in sim, so the
+policy sees the sensor reading the ball *would* produce right before it hits the robot.
+
+**Environment** — `Template-H12-Survive-Time-Perfect-WM`
+(`h12_survive_time_env_cfg_hybrid_perfect_wm.py`) is the WM environment plus a `Future_Projectile`: a
+kinematic, collision-free, semi-transparent red sphere. Robot, projectile, rewards and terminations are
+unchanged. Every step, the `future_projectile` policy term in `mdp/observations.py` returns an empty
+observation and does the following:
+
+1. Propagates the projectile ballistically for up to R = `ORACLE_ROLLOUT_FRAMES` frames. Each frame is
+   `CONTEXT_STRIDE` control steps, matching the PWM. The path follows PhysX's semi-implicit Euler
+   integration, so a free-flying ball's predicted position matches the real one exactly. z is clamped at
+   the ground, and the robot is held at its current pose.
+2. At every control step, tests whether the ball occupies the robot's URDF collision geometry. This
+   uses the same surface test as ORACLE-CP, generalized to a batch of positions, and checking every
+   step stops the ball from passing through thin links between frames.
+3. Places `Future_Projectile` at the last frame **before** the first intersecting step. If nothing
+   intersects within R, it goes at frame R. The position, the contact flag and the frame index are
+   stored on `env._future_projectile_{pos_w,contact,frame}`.
+4. Calls `update_future(pos_w)` on every sensor.
+
+**Sensors** — `TofSensor` (RAY) and `CapacitiveSensor` (FIELD) have new `update_future(future_pos_w)`
+methods that fill `data.future_dist_est` and `data.future_dist_est_normalized`. These have the same
+meaning as `dist_est`/`dist_est_normalized`, but with the ball at the future pose; their shape is
+`(N, S, 1, P)` for RAY and `(N, S, 1)` for FIELD. The current and future readings come from the same
+helpers (`_ray_dist_est` / `_field_dist_est`), so they always use identical math. Outside the
+Perfect-WM environment these buffers stay at max range.
+
+**Future observation types** (`FUTURE_OBS_TYPE` in `ablator.py`, `--wm_future_obs_type` in `train_wm.py`):
+
+| Type | Future features | WM calls for the future |
+|------|-----------------|-------------------------|
+| `SIM-RAW` | future ToF image (like `DECODED`) | none |
+| `SIM-MINDIST` | per-sensor min of that image (like `MIN-DECODED`) | none |
+| `SIM-LATENT` | PWM encoder latent of that image (like `LATENT`) | encoder only, no dynamics |
+
+With `CONTACT_PRED=True` the sim contact flag is appended in place of the PWM's. The ablator automatically
+switches to the Perfect-WM task when `FUTURE_OBS_TYPE` starts with `SIM-`. The shared feature code is in
+`scripts/rsl_rl/sim_future.py`. `TOFWorldModel` is not modified: it runs with `future_obs_type="none"`, so
+no rollouts happen.
+
+**Verifying** — set `save_video=True` in `ablator.py` (or call `play_wm_record.py` with
+`--task Template-H12-Survive-Time-Perfect-WM`). The video shows the real ball and the red, semi-transparent
+`Future_Projectile`. In `wm_observations.png`, the *Future* row shows the simulated future ToF image and
+the *Contact* row shows the sim contact flag.

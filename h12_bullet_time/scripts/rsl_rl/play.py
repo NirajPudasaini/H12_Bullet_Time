@@ -213,6 +213,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video
+            print(f"[VIDEO_PROGRESS] {timestep} {args_cli.video_length}", flush=True)
             if timestep == args_cli.video_length:
                 break
 
