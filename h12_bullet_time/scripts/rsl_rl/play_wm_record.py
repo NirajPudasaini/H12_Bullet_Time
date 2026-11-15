@@ -264,6 +264,14 @@ def _time_markers(axes, T, W):
     axes[-1].set_xlabel("Timestep")
 
 
+def _first_trajectory_length(dones) -> int:
+    """Steps through the first episode reset, including that terminal step."""
+    for index, done in enumerate(dones):
+        if done:
+            return index + 1
+    return len(dones)
+
+
 def _hold_contact_frames(contact_stitched, contact_steps, dones, shape):
     """Repeat each contact image from the previous reset through that contact step."""
     canvas = torch.ones(shape, dtype=torch.float32)
@@ -618,19 +626,25 @@ def main(env_cfg, agent_cfg):
     roll_path = None
     files = []
     if save_images:
-        cur_dec = _decode_latents(world_model, current, spatial_shape)
+        traj = _first_trajectory_length(dones)
+        print(f"[WM_VERIFY] Observation image uses the first trajectory: {traj}/{T} steps")
+        image_flags = None if flags is None else flags[:traj]
+        cur_dec = _decode_latents(world_model, current[:traj], spatial_shape)
         cur_stitched = _stitch_sensor_grid(cur_dec)
         if record_future:
-            fut_stitched = _stitch_sensor_grid(_decode_latents(world_model, future, spatial_shape))
+            fut_stitched = _stitch_sensor_grid(_decode_latents(world_model, future[:traj], spatial_shape))
         if record_sim:
-            fut_stitched = _stitch_sensor_grid(torch.stack(sim_frames))
-        contact_stitched = _stitch_sensor_grid(torch.stack(contact_frames)) if contact_frames else None
-        true_contact = _hold_contact_frames(contact_stitched, contact_steps, dones, cur_stitched.shape)
+            fut_stitched = _stitch_sensor_grid(torch.stack(sim_frames[:traj]))
+        traj_contacts = [(frame, step) for frame, step in zip(contact_frames, contact_steps) if step < traj]
+        contact_stitched = _stitch_sensor_grid(torch.stack([frame for frame, _ in traj_contacts])) if traj_contacts else None
+        true_contact = _hold_contact_frames(
+            contact_stitched, [step for _, step in traj_contacts], dones[:traj], cur_stitched.shape,
+        )
         figure_path = out_dir / "wm_observations.png"
-        _save_obs_figure(cur_stitched, figure_path, fut_stitched, flags, true_contact)
+        _save_obs_figure(cur_stitched, figure_path, fut_stitched, image_flags, true_contact)
         files = ["wm_observations.png"]
     if save_images and record_rollout:
-        roll = np.stack(rollouts)
+        roll = np.stack(rollouts[:traj])
         T_roll, R, tpf, e_dim = roll.shape
         roll_dec = _decode_latents(world_model, roll.reshape(T_roll * R, tpf, e_dim), spatial_shape)
         roll_path = out_dir / "wm_rollout.png"
