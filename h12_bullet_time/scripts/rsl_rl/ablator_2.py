@@ -104,6 +104,10 @@ def _wm_run_suffix(params: dict) -> str:
     return f"CUR-{cur}-FUT-{fut}-{contact}"
 
 
+def _hidden_dims_tag(params: dict) -> str:
+    return str(params.get("ABLATION_HIDDEN_DIMS", "512,512")).replace(" ", "").replace(",", "x")
+
+
 def _parse_wm_stats(output: str) -> dict:
     for line in reversed(output.splitlines()):
         if "[WM_STATS]" in line:
@@ -208,6 +212,7 @@ def train_and_test(
     headless: bool = True,
     verbose: bool = True,
     seed: int | None = None,
+    device: str | None = None,
 ) -> AblationResult:
     """Train and test with given ablation parameters. Returns AblationResult."""
 
@@ -225,6 +230,7 @@ def train_and_test(
         num_envs = int(params.get("ABLATION_NUM_ENVS", num_envs))
     
     sensor_tag = str(params.get("ABLATION_SENSORS", "")).replace(":", "-").replace(";", "_")
+    sensor_tag += f"-HD{_hidden_dims_tag(params)}"
     if use_wm:
         suffix = f"WM-{_wm_run_suffix(params)}"
         sensor_tag = f"{sensor_tag}-{suffix}" if sensor_tag else suffix
@@ -242,6 +248,8 @@ def train_and_test(
         train_cmd.append("--headless")
     if seed is not None:
         train_cmd.extend(["--seed", str(seed)])
+    if device:
+        train_cmd.extend(["--device", device])
     if use_wm:
         _append_wm_args(train_cmd, params)
     
@@ -292,6 +300,8 @@ def train_and_test(
         eval_cmd.append("--headless")
     if seed is not None:
         eval_cmd.extend(["--seed", str(seed)])
+    if device:
+        eval_cmd.extend(["--device", device])
     
     print(f"[ABLATION] Evaluating...")
     eval_returncode, _ = run_cmd(eval_cmd, env, verbose=verbose)
@@ -316,6 +326,7 @@ def record_video(
     num_envs: int = 1,
     video_length: int = 300,
     timeout: int = 300,
+    device: str | None = None,
 ) -> bool:
     """Record a video of the task with the given ablation parameters."""
     script_dir = Path(__file__).parent
@@ -334,6 +345,8 @@ def record_video(
         "--num_envs", str(num_envs),
         "--headless",
     ]
+    if device:
+        video_cmd.extend(["--device", device])
     
     print(f"[ABLATION] Recording video with {num_envs} env(s), {video_length} steps...")
     try:
@@ -398,6 +411,7 @@ def collect_trajectories(
     random_seed: bool = False,
     headless: bool = True,
     verbose: bool = True,
+    device: str | None = None,
 ) -> str:
     """Collect H5 trajectories for one ablation config via collect_data_2.py."""
     script_dir = Path(__file__).parent
@@ -436,6 +450,8 @@ def collect_trajectories(
         cmd.extend(["--seed", str(seed)])
     if headless:
         cmd.append("--headless")
+    if device:
+        cmd.extend(["--device", device])
 
     seed_msg = "random seed" if random_seed else f"seed={seed}"
     print(f"[ABLATION] Collecting {num_trajectories} trajectories ({seed_msg}) -> {dest}")
@@ -654,6 +670,7 @@ def run_ablation_study(
                 random_seed=False,
                 headless=kwargs.get("headless", True),
                 verbose=kwargs.get("verbose", True),
+                device=kwargs.get("device"),
             )
 
         results.append(result)
@@ -666,6 +683,7 @@ def run_ablation_study(
                 params=full_params,
                 num_envs=video_num_envs,
                 video_length=video_length,
+                device=kwargs.get("device"),
             )
         
         with open(output_file, "w") as f:
@@ -696,7 +714,7 @@ def run_ablation_study(
             )
         if r.traj_dir:
             extra += f", trajs={r.traj_dir}"
-        print(f"  {r.params} -> success={r.success}{extra}")
+        print(f"  {r.params} -> hidden_dims={_hidden_dims_tag(r.params)}, success={r.success}{extra}")
     print(f"\nResults saved to: {output_file}")
     
     return results
@@ -722,8 +740,9 @@ DEFAULTS = {
     "ABLATION_PROJECTILE_MAX_HEIGHT": 3.0,
     "ABLATION_SEED": 42,
     "ABLATION_NUM_ENVS": 4096,
-    "USE_WORLD_MODEL": False,  # False: train.py + eval.py; True: train_wm.py
-    "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/tof_wm_2000.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
+    "ABLATION_HIDDEN_DIMS": "32,32",  # shared actor/critic hidden dims, comma-separated
+    "USE_WORLD_MODEL": True,  # False: train.py + eval.py; True: train_wm.py
+    "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/p6000/ToFWM-S-e8/tof_wm.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
     "WM_CONFIG": None,  # YAML for checkpoints that lack an embedded config
     "WM_OUTPUT_CHECKPOINT": None,  # adapted-weight save path; default <checkpoint_stem>_robot.pt
     "WM_MODE": "frozen",  # frozen = infer only; alternating = collect trajectories and retrain
@@ -758,8 +777,9 @@ if __name__ == "__main__":
     #
     PARAM_GRID = {
         # Training seed. Repeats retrain with random_seed / seed+repeat, not this list.
-        "ABLATION_SEED": [500],
+        # "ABLATION_SEED": [500],
         # "ABLATION_SEED": [43, 44, 45, 46, 47, 48, 49, 50, 51, 52],
+        "ABLATION_SEED": [43, 44, 45, 46, 47],
         # "ABLATION_SEED": [53],
         "ABLATION_SENSORS": [
             # ── Single sensor shapes ──────────────────────────────────
@@ -774,7 +794,7 @@ if __name__ == "__main__":
             # "RAY:BIN:X",
             # "RAY:MINBIN:X",
             # "RAY:EVENT:X",
-            # "RAY:TRUE_POS:X",
+            "RAY:TRUE_POS:X",
             # Cone sensor (conical receptive field, 30° default)
             # "CONE:DIST:X",
             # "CONE:BIN:X",
@@ -797,6 +817,7 @@ if __name__ == "__main__":
         # ],
 
         "ABLATION_MAX_RANGE": [2.0],
+        "ABLATION_HIDDEN_DIMS": ["512,512", "128,128"],
 
         # Test case
         # "ABLATION_SENSORS": ["FIELD:EVENT:X;FIELD:MINDIST:X"],
@@ -836,15 +857,17 @@ if __name__ == "__main__":
     run_ablation_study(
         param_grid=PARAM_GRID,
         num_envs=4096,
-        training_iters=100,
+        training_iters=3000,
         headless=True,
+        device="cuda:0",
         task="Template-H12-Survive-Time-HYBRID",
         verbose=False,
         save_video=False,
         video_length=1000,
-        collect_output_dir="collected_trajectories",
-        num_trajectories=100,
-        collect_num_envs=512,
-        collect_repeats=10,
-        random_seed=True,
+        collect_output_dir=None,
+        # collect_output_dir="collected_trajectories",
+        # num_trajectories=100,
+        # collect_num_envs=512,
+        # collect_repeats=10,
+        random_seed=False,
     )

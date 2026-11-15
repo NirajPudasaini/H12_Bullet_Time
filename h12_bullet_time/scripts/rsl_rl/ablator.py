@@ -70,6 +70,16 @@ def _as_bool(v) -> bool:
     return str(v).lower() in ("1", "true", "yes")
 
 
+def _apply_device(cmd: list[str], env: dict, device: str | None) -> None:
+    if not device:
+        return
+    if device.startswith("cuda:"):
+        env["CUDA_VISIBLE_DEVICES"] = device.split(":")[-1]
+        cmd.extend(["--device", "cuda:0"])
+    else:
+        cmd.extend(["--device", device])
+
+
 def _fmt_duration(seconds: float) -> str:
     seconds = max(0, int(round(seconds)))
     h, rem = divmod(seconds, 3600)
@@ -106,6 +116,10 @@ def _wm_run_suffix(params: dict) -> str:
         frame = -1
     horizon = "AUTO" if frame < 0 else f"R{frame}"
     return f"CUR-{cur}-FUT-{fut}-{horizon}-{contact}"
+
+
+def _hidden_dims_tag(params: dict) -> str:
+    return str(params.get("ABLATION_HIDDEN_DIMS", "512,512")).replace(" ", "").replace(",", "x")
 
 
 def _parse_wm_stats(output: str) -> dict:
@@ -213,6 +227,7 @@ def train_and_test(
     headless: bool = True,
     verbose: bool = True,
     seed: int | None = None,
+    device: str | None = None,
 ) -> AblationResult:
     """Train and test with given ablation parameters. Returns AblationResult."""
 
@@ -230,6 +245,7 @@ def train_and_test(
         num_envs = int(params.get("ABLATION_NUM_ENVS", num_envs))
     
     sensor_tag = str(params.get("ABLATION_SENSORS", "")).replace(":", "-").replace(";", "_")
+    sensor_tag += f"-HD{_hidden_dims_tag(params)}"
     if use_wm:
         suffix = f"WM-{_wm_run_suffix(params)}"
         sensor_tag = f"{sensor_tag}-{suffix}" if sensor_tag else suffix
@@ -249,6 +265,7 @@ def train_and_test(
         train_cmd.extend(["--seed", str(seed)])
     if use_wm:
         _append_wm_args(train_cmd, params)
+    _apply_device(train_cmd, env, device)
     
     print(f"\n{'='*60}\n[ABLATION] Training with params: {params}\n{'='*60}")
     train_returncode, train_output = run_cmd(train_cmd, env, verbose=verbose)
@@ -297,6 +314,7 @@ def train_and_test(
         eval_cmd.append("--headless")
     if seed is not None:
         eval_cmd.extend(["--seed", str(seed)])
+    _apply_device(eval_cmd, env, device)
     
     print(f"[ABLATION] Evaluating...")
     eval_returncode, _ = run_cmd(eval_cmd, env, verbose=verbose)
@@ -382,6 +400,7 @@ def record_video(
     num_envs: int = 1,
     video_length: int = 300,
     timeout: int = 300,
+    device: str | None = None,
 ) -> bool:
     """Record a video of the task with the given ablation parameters."""
     script_dir = Path(__file__).parent
@@ -400,6 +419,7 @@ def record_video(
         "--num_envs", str(num_envs),
         "--headless",
     ]
+    _apply_device(video_cmd, env, device)
     
     print(f"[ABLATION] Recording video with {num_envs} env(s), {video_length} steps...")
     try:
@@ -517,9 +537,13 @@ def run_ablation_study(
     video_num_envs: int = 1,
     video_length: int = 300,
     task: str = "Isaac-H12-Bullet-Time-Hybrid-v0",
+    device: str | None = None,
     **kwargs,
 ) -> list[AblationResult]:
     """Run ablation study over parameter grid. Returns list of results."""
+    if device and device.startswith("cuda:"):
+        os.environ["CUDA_VISIBLE_DEVICES"] = device.split(":")[-1]
+        print(f"[ABLATION] Pinning to {device}")
     _seed_val = param_grid.get("ABLATION_SEED", 42)
     seed = _seed_val[0] if isinstance(_seed_val, list) else _seed_val
 
@@ -566,7 +590,9 @@ def run_ablation_study(
         elapsed = time.perf_counter() - study_t0
         print(f"\n[{i+1}/{total_to_run}] Running configuration... {_eta_text(i, total_to_run, elapsed)}")
         cfg_t0 = time.perf_counter()
-        result = train_and_test(full_params, max_train_iters=training_iters, task=task, seed=config_seed, **kwargs)
+        result = train_and_test(
+            full_params, max_train_iters=training_iters, task=task, seed=config_seed, device=device, **kwargs
+        )
         results.append(result)
 
         if save_video:
@@ -616,7 +642,7 @@ def run_ablation_study(
                 f"avg_inference_ms={r.avg_inference_ms}, "
                 f"hz={r.avg_inference_hz}, envs_per_s={r.envs_per_s}"
             )
-        print(f"  {r.params} -> success={r.success}{extra}")
+        print(f"  {r.params} -> hidden_dims={_hidden_dims_tag(r.params)}, success={r.success}{extra}")
     print(f"\nResults saved to: {output_file}")
     
     return results
@@ -642,7 +668,8 @@ DEFAULTS = {
     "ABLATION_PROJECTILE_MAX_HEIGHT": 3.0,
     "ABLATION_SEED": 42,
     "ABLATION_NUM_ENVS": 4096,
-    "USE_WORLD_MODEL": False,  # False: train.py + eval.py; True: train_wm.py
+    "ABLATION_HIDDEN_DIMS": "32,32",  # shared actor/critic hidden dims, comma-separated
+    "USE_WORLD_MODEL": True,  # False: train.py + eval.py; True: train_wm.py
     "WM_CHECKPOINT": "/home/carson/GenTact/trybrid_skin_project/checkpoints/ToFWM-S/tof_wm_2000_long.pt",  # TOFWM .pt path; required when USE_WORLD_MODEL is True
     "WM_CONFIG": None,  # YAML for checkpoints that lack an embedded config
     "WM_OUTPUT_CHECKPOINT": None,  # adapted-weight save path; default <checkpoint_stem>_robot.pt
@@ -650,6 +677,7 @@ DEFAULTS = {
     "WM_CONTACT_THRESHOLD": 0.7,
     "INFERENCE_FRAMES": 2, # Only run inference every N frames
     "CONTEXT_STRIDE": 6, # 3 For 20 hz, 6 For 10 hz trained model
+    "ORACLE_ROLLOUT_FRAMES": 9,  # ORACLE-CP horizon R in frames of CONTEXT_STRIDE steps (match the PWM's R)
     "ROLLOUT_FRAME": -1,  # 1-based future frame; 2 is the second prediction. -1 = first contact, else last frame 
     "WM_BATCH_SIZE": 1024,  # WM inference micro-batch size
     "WM_REDUCTION": "flatten",  # mean-pool latent tokens (flatten keeps all tokens)
@@ -675,42 +703,44 @@ if __name__ == "__main__":
     #
     # ABLATION_SENSORS format: "SHAPE:SIGNAL:MAX_RANGE"
     #   Shapes:  FIELD, RAY, CONE
-    #   Signals: DIST, MINDIST, BIN, MINBIN, TRUE_POS, ORACLE, EVENT
+    #   Signals: DIST, MINDIST, BIN, MINBIN, TRUE_POS, ORACLE, ORACLE-CP, EVENT
     #   Combine with semicolons: "FIELD:DIST:4.0;RAY:MINDIST:4.0"
     #   ORACLE = [ball xyz, impact xyz] (6), revealed only while any sensor detects the ball
+    #   ORACLE-CP = [ball xyz, target xyz if contact within R else ball xyz at R, contact] (7), same gating
     #
     PARAM_GRID = {
         # "ABLATION_SEED": [48, 49],
+        # "ABLATION_SEED": [43, 44,45, 46, 47],
         # "ABLATION_SEED": [43],
         # "ABLATION_SENSORS": [
-        #     # ── Single sensor shapes ──────────────────────────────────
-        #     # Field sensor (spherical detection)
-        #     # "FIELD:DIST:X",
-        #     # "FIELD:BIN:X",
-        #     # "FIELD:EVENT:X",
-        #     # "FIELD:TRUE_POS:X",
-        #     # "FIELD:ORACLE:X",
-        #     # Ray sensor (8x8 grid)
-        #     # "RAY:DIST:X",
-        #     "RAY:MINDIST:X",
-        #     # "RAY:BIN:X",
-        #     # "RAY:MINBIN:X",
-        #     # "RAY:EVENT:X",
-        #     "RAY:TRUE_POS:X",
-        #     # "RAY:ORACLE:X",
-        #     # Cone sensor (conical receptive field, 30° default)
-        #     # "CONE:DIST:X",
-        #     # "CONE:BIN:X",
-        #     # "CONE:EVENT:X",
-        #     # "CONE:TRUE_POS:X",
-        #     # "CONE:ORACLE:X",
-        #     # ── Sensor combinations ───────────────────────────────────
-        #     # "FIELD:DIST:X;RAY:DIST:X",
+            # ── Single sensor shapes ──────────────────────────────────
+            # Field sensor (spherical detection)
+            # "FIELD:DIST:X",
+            # "FIELD:BIN:X",
+            # "FIELD:EVENT:X",
+            # "FIELD:TRUE_POS:X",
+            # "FIELD:ORACLE:X",
+            # Ray sensor (8x8 grid)
+            # "RAY:DIST:X",
+            # "RAY:MINDIST:X",
+            # "RAY:BIN:X",
+            # "RAY:MINBIN:X",
+            # "RAY:EVENT:X",
+            # "RAY:TRUE_POS:X",
+            # "RAY:ORACLE:X",
+            # Cone sensor (conical receptive field, 30° default)
+            # "CONE:DIST:X",
+            # "CONE:BIN:X",
+            # "CONE:EVENT:X",
+            # "CONE:TRUE_POS:X",
+            # "CONE:ORACLE:X",
+            # ── Sensor combinations ───────────────────────────────────
+            # "FIELD:DIST:X;RAY:DIST:X",
 
-        #     #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
-        #     # "FIELD:DIST:X;FIELD:BIN:X",
-        #     # "RAY:DIST:X;RAY:BIN:X",
-        #     # "CONE:DIST:X;CONE:BIN:X",
+            #   # --- Masked Double Passing ---> Do this after training the single sensor models to find the best single sensor model.
+            # "FIELD:DIST:X;FIELD:BIN:X",
+            # "RAY:DIST:X;RAY:BIN:X",
+            # "CONE:DIST:X;CONE:BIN:X",
         # ],
         # --- Multimodel testing ---
         # "ABLATION_SENSORS": [
@@ -760,38 +790,71 @@ if __name__ == "__main__":
         # RAW uses the sensor vector (MINDIST -> one distance per sensor). The WM still gets the full image.
         # DECODED is the full decoded image. MIN-DECODED mins that image to one distance per sensor.
         # "CURRENT_OBS_TYPE": ["RAW", "LATENT", "NONE"],
-        # "CURRENT_OBS_TYPE": ["RAW"],
+        # "CURRENT_OBS_TYPE": ["LATENT"],
         # "FUTURE_OBS_TYPE": ["LATENT", "DECODED", "MIN-DECODED", "CLOSEST-POINT", "NONE"],
-        # "FUTURE_OBS_TYPE": ["MIN-DECODED"],
+        # "FUTURE_OBS_TYPE": ["LATENT", "NONE"],
         # "CONTACT_PRED": [True],
         # "WM_PRECISION": ["fp16", "bf16"],
 
-        # Dimensionality study
+        ####### Oracle Model size study #######
+        # "ABLATION_SENSORS": ["RAY:ORACLE:X"],
+        # "CURRENT_OBS_TYPE": ["RAW"],
+        # "USE_WORLD_MODEL": [False],
+
+        ####### Min Dist WM Study #######
+        # "ABLATION_SEED": [43, 44, 45, 46, 47],
+        # "ABLATION_HIDDEN_DIMS": ["512,512", "128,128"],
+        # "ABLATION_SENSORS": ["RAY:MINDIST:X"],
+        # "CURRENT_OBS_TYPE": ["RAW"],
+        # "FUTURE_OBS_TYPE": ["MIN-DECODED"],
         # "USE_WORLD_MODEL": [True],
-        # "ABLATION_SENSORS": [
-        #     # "RAY:MINDIST:X",
-        #     # "RAY:TRUE_POS:X",
-        #     "RAY:DIST:X",
-        # ],
         # "WM_CHECKPOINT": [
-        #     "/home/carson/isaac-lab/bullet_time_data_processing/checkpoints/ToFWM-S-e8/tof_wm.pt"
+        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
         # ],
-        # "CURRENT_OBS_TYPE": ["LATENT"],
-        # "FUTURE_OBS_TYPE": ["EMPTY", "NOISE", "REDUNDANT"],
         # "CONTACT_PRED": [True],
 
-        # Fixing missed runs
+        # ####### Latent Future WM Study #######
+        # "ABLATION_SEED": [43, 44, 45, 46, 47],
+        # "ABLATION_HIDDEN_DIMS": ["32,32", "512,512", "128,128"],
+        # "ABLATION_SENSORS": ["RAY:DIST:X"],
+        # "CURRENT_OBS_TYPE": ["LATENT"],
+        # "FUTURE_OBS_TYPE": ["LATENT"],
+        # "USE_WORLD_MODEL": [True],
+        # "WM_CHECKPOINT": [
+        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        # ],
+        # "CONTACT_PRED": [True],
+
+        # ###### f_psi WM Study #######
+        # "ABLATION_SEED": [43, 44, 45, 46, 47],
+        # "ABLATION_HIDDEN_DIMS": ["512,512", "128,128"],
+        # "ABLATION_SENSORS": ["RAY:DIST:X"],
+        # "CURRENT_OBS_TYPE": ["LATENT"],
+        # "FUTURE_OBS_TYPE": ["NONE"],
+        # "USE_WORLD_MODEL": [True],
+        # "WM_CHECKPOINT": [
+        #     "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        # ],
+        # "CONTACT_PRED": [False],
+
+        ###### f_psi WM Study #######
         "ABLATION_SEED": [45, 48, 49, 50, 51, 52],
-        "USE_WORLD_MODEL": [True],
-        "ABLATION_SENSORS": [
-            "RAY:DIST:X",
-        ],
-        "WM_CHECKPOINT": [
-            "/home/carson/isaac-lab/bullet_time_data_processing/checkpoints/ToFWM-S-e8/tof_wm.pt"
-        ],
+        "ABLATION_HIDDEN_DIMS": ["32,32"],
+        "ABLATION_SENSORS": ["RAY:DIST:X"],
         "CURRENT_OBS_TYPE": ["LATENT"],
         "FUTURE_OBS_TYPE": ["NONE"],
+        "USE_WORLD_MODEL": [True],
+        "WM_CHECKPOINT": [
+            "/home/carson/GenTact/trybrid_skin_project/checkpoints/c3r9/p6000/ToFWM-S-e8/tof_wm.pt"
+        ],
         "CONTACT_PRED": [False],
+
+        # #### ORACLE-CP Study ####
+        # "ABLATION_SEED": [43, 44, 45, 46, 47],
+        # "ABLATION_HIDDEN_DIMS": ["32,32", "512,512", "128,128"],
+        # "ABLATION_SENSORS": ["RAY:ORACLE-CP:X"],
+        # "CURRENT_OBS_TYPE": ["RAW"],
+        # "USE_WORLD_MODEL": [False],
     }
     
     run_ablation_study(
@@ -803,4 +866,5 @@ if __name__ == "__main__":
         verbose=False,
         save_video=False,
         video_length=1000,
+        device="cuda:0",
     )

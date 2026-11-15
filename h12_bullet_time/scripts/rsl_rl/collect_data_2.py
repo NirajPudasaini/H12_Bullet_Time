@@ -446,6 +446,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.seed = agent_cfg.seed
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    agent_cfg.device = args_cli.device if args_cli.device is not None else agent_cfg.device
 
     log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
     print(f"[INFO] Loading experiment from directory: {log_root_path}")

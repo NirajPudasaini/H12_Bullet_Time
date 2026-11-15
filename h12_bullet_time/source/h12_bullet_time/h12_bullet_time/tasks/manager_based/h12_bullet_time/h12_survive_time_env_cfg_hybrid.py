@@ -35,12 +35,12 @@ from h12_bullet_time.utils.urdf_tools import extract_sensor_poses_from_urdf
 # ── Default parameter values ─────────────────────────────────────────────────
 _DEFAULT_PROJECTILE_RADIUS = 0.15
 _DEFAULT_PROJECTILE_MASS = 0.1
-_DEFAULT_PROJECTILE_MIN_SPAWN_DIST = 4.0
-_DEFAULT_PROJECTILE_MAX_SPAWN_DIST = 6.0
-_DEFAULT_PROJECTILE_MIN_HEIGHT = 2.0
-_DEFAULT_PROJECTILE_MAX_HEIGHT = 3.0
-_DEFAULT_PROJECTILE_MIN_SPEED = 4.0
-_DEFAULT_PROJECTILE_MAX_SPEED = 6.0
+_DEFAULT_PROJECTILE_MIN_SPAWN_DIST = 4.0 # Note: This is not used in the current implementation
+_DEFAULT_PROJECTILE_MAX_SPAWN_DIST = 6.0 # Note: This is not used in the current implementation
+_DEFAULT_PROJECTILE_MIN_HEIGHT = 2.0 # Note: This is not used in the current implementation
+_DEFAULT_PROJECTILE_MAX_HEIGHT = 3.0 # Note: This is not used in the current implementation
+_DEFAULT_PROJECTILE_MIN_SPEED = 4.0 # Note: This is not used in the current implementation
+_DEFAULT_PROJECTILE_MAX_SPEED = 6.0 # Note: This is not used in the current implementation
 _DEFAULT_PROJECTILE_SPAWN_INTERVAL_RANGE = (1.0, 2.0)
 _DEFAULT_DEBUG_VIS = False
 _DEFAULT_SENSORS = "FIELD:MINDIST:4.0"
@@ -89,6 +89,7 @@ _termination_height_threshold = float(os.environ.get("ABLATION_TERMINATION_HEIGH
 #   "CONE:EVENT:X;RAY:MINDIST:4.0"          cone uses ABLATION_MAX_RANGE, ray fixed at 4.0
 #   "RAY:TRUE_POS:X"                         projectile position, gated by any ray detection
 #   "RAY:ORACLE:X"                           [ball xyz, impact xyz] (6), gated like TRUE_POS
+#   "RAY:ORACLE-CP:X"                        [ball xyz, contact/R-horizon xyz, contact bit] (7), gated like TRUE_POS
 _default_max_range = float(os.environ.get("ABLATION_MAX_RANGE", 4.0))
 _sensors_str = os.environ.get("ABLATION_SENSORS", _DEFAULT_SENSORS)
 _sensor_specs = []

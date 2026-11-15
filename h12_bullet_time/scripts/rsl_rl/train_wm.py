@@ -340,7 +340,9 @@ def main(env_cfg, agent_cfg):
     # set the environment seed
     # note: certain randomizations occur in the environment initialization so we set the seed here
     env_cfg.seed = agent_cfg.seed
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    if args_cli.device is not None:
+        env_cfg.sim.device = args_cli.device
+        agent_cfg.device = args_cli.device
     if args_cli.wm_mode == "alternating":
         raise ValueError("Alternating WM training does not yet collect aligned action/contact labels")
     if min(args_cli.wm_trajectories_per_cycle, args_cli.wm_total_trajectories,
