@@ -182,6 +182,26 @@ def _robot_occupies(env: ManagerBasedRLEnv, centers_w: torch.Tensor, radius: flo
     return occupied if centers_w.dim() == 3 else occupied[:, 0]
 
 
+def _render_kinematic_update(sim) -> None:
+    """Redraw after a kinematic write without recomputing articulation poses.
+
+    ``sim.render`` runs ``update_articulations_kinematic``. Physics already rendered the
+    solved pose, and that call is a no-op then. After ``write_root_pose_to_sim`` the same
+    call rebuilds every link from the joint coordinates and drops the solver's contact
+    correction, so the recorded frame shows the feet in the ground.
+    """
+    view = sim.physics_sim_view
+    if view is None:
+        sim.render()
+        return
+    original = view.update_articulations_kinematic
+    view.update_articulations_kinematic = lambda *args, **kwargs: None
+    try:
+        sim.render()
+    finally:
+        view.update_articulations_kinematic = original
+
+
 def future_projectile(env: ManagerBasedRLEnv, asset_name: str = "Future_Projectile") -> torch.Tensor:
     """Place Future_Projectile one frame before the projectile would occupy the robot, then refresh sensor futures.
 
@@ -210,14 +230,31 @@ def future_projectile(env: ManagerBasedRLEnv, asset_name: str = "Future_Projecti
         quat = torch.zeros(env.num_envs, 4, device=env.device)
         quat[:, 0] = 1.0
         env.scene[asset_name].write_root_pose_to_sim(torch.cat([future, quat], dim=-1))
-        # The physics render happens before observations, and a video frame is captured from that
-        # render when cameras are enabled. Render again so the frame shows this pose.
+        # The physics render happens before observations, and the video frame is captured from
+        # the last render. Draw again so the frame includes this pose, without articulation FK.
         if env.render_mode == "rgb_array":
-            env.sim.render()
+            _render_kinematic_update(env.sim)
     for sensor in env.scene.sensors.values():
         if hasattr(sensor, "update_future"):
             sensor.update_future(future)
     return torch.zeros((env.num_envs, 0), device=env.device)
+
+
+def _show_oracle_cp_ball(env: ManagerBasedRLEnv, pos_w: torch.Tensor) -> None:
+    """Put Future_Projectile on the ORACLE-CP point. SIM-* keeps future_projectile's placement."""
+    if "Future_Projectile" not in getattr(env.scene, "rigid_objects", {}):
+        return
+    terms = getattr(getattr(env, "observation_manager", None), "active_terms", None) or {}
+    if any("future_projectile" in names for names in terms.values()):
+        return
+    if getattr(env, "_oracle_cp_vis_step", None) == env.common_step_counter:
+        return
+    env._oracle_cp_vis_step = env.common_step_counter
+    quat = torch.zeros(env.num_envs, 4, device=env.device)
+    quat[:, 0] = 1.0
+    env.scene["Future_Projectile"].write_root_pose_to_sim(torch.cat([pos_w, quat], dim=-1))
+    if env.render_mode == "rgb_array":
+        _render_kinematic_update(env.sim)
 
 
 def _oracle_cp_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor:
@@ -245,6 +282,7 @@ def _oracle_cp_gated(env: ManagerBasedRLEnv, sensor_prefix: str) -> torch.Tensor
         on_course = (t_hit >= 0) & (t_hit <= horizon) & ((at_hit - target).norm(dim=-1) < radius)
         contact = on_course & _robot_occupies(env, target, radius)
         future = torch.where(contact[:, None], target, future)
+    _show_oracle_cp_ball(env, future)
     gate = _any_detected(env, sensor_prefix).unsqueeze(-1).float()
     return torch.cat([pos - robot_pos, future - robot_pos, contact.unsqueeze(-1).float()], dim=-1) * gate
 

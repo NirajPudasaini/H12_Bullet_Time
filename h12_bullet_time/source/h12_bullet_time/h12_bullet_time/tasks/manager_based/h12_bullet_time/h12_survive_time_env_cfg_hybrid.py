@@ -260,6 +260,22 @@ for link_name in _CONTACT_DETECTION_LINKS:
 for sensor_name, sensor_cfg in _sensor_configs.items():
     setattr(H12SurviveTimeSceneCfg_HYBRID, sensor_name, sensor_cfg)
 
+if any(spec["signal"] == "ORACLE-CP" for spec in _sensor_specs):
+    setattr(
+        H12SurviveTimeSceneCfg_HYBRID,
+        "Future_Projectile",
+        RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/Future_Projectile",
+            spawn=sim_utils.SphereCfg(
+                radius=_projectile_radius,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), opacity=1.0),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True, disable_gravity=True),
+                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+            ),
+            init_state=RigidObjectCfg.InitialStateCfg(pos=(-1.0, -1.0, 0.0)),
+        ),
+    )
+
 for sensor_name, sensor_cfg in _contact_sensor_configs.items():
     setattr(H12SurviveTimeSceneCfg_HYBRID, sensor_name, sensor_cfg)
 
